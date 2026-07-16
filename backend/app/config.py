@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     # App
     app_env: str = Field(default="local")
     cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173")
+    auto_setup: bool = Field(default=True)  # train models on startup if missing
 
     @property
     def has_azure(self) -> bool:

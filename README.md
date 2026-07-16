@@ -30,48 +30,71 @@ Data: clean star-schema CSVs   +   Actions: email / reorder / chart / export
 | Delay-risk identification | ML classifier (macro-F1 ≈ 0.76) |
 | Machine downtime risk | ML classifier (F1 ≈ 0.90) |
 | Demand vs capacity | ML regressor (MAPE ≈ 14% vs 22% baseline) |
+## Quick start (fresh clone)
 
-## Prerequisites
-- Python 3.11+ and Node.js 20+
-- Install backend deps: `cd backend && pip install -r requirements.txt`
+**Prerequisites:** Python 3.11+ and Node.js 20+.
 
-## 1. Data (already generated in `backend/data/star/`)
+The dataset CSVs are committed, but the ML models are **not** (they're build artifacts).
+You train them **once** — after that the server starts instantly on every run.
+
 ```bash
-python backend/data/generate_dataset.py   # regenerate
-python backend/data/validate_dataset.py   # integrity check (must PASS)
-```
-
-## 2. Train the ML models (already trained in `backend/models/`)
-```bash
+# 1. Backend deps
 cd backend
 pip install -r requirements.txt
-python -m app.ml.train
+
+# 2. One-time setup: trains all models if missing (idempotent, ~2-3 min).
+#    Data is regenerated only if it's missing.
+python -m app.setup
+
+# 3. Run the backend
+python -m uvicorn app.main:app --port 8000
 ```
 
-## 3. Run the backend
-```bash
-cd backend
-python -m uvicorn app.main:app --reload --port 8000
-```
-Key endpoints: `GET /api/status`, `POST /api/chat`, `WS /ws/chat`,
-`GET /api/capacity|bottlenecks|schedule|risk/delay|risk/downtime|demand`,
-`POST /api/actions/execute`.
+> You do **not** retrain on every run. `python -m app.setup` is a one-time step; the models
+> persist in `backend/models/`. If you skip step 2, the server auto-trains on first startup
+> (set `AUTO_SETUP=0` in `.env` to disable that). `python -m app.setup --force` retrains from scratch.
 
-## 4. Run the frontend
 ```bash
+# 4. Frontend (separate terminal)
 cd frontend
 npm install
 npm run dev        # http://localhost:5173 (proxies /api and /ws to :8000)
 ```
 
-## 5. Tests
+Key endpoints: `GET /api/status`, `POST /api/chat`, `WS /ws/chat`,
+`GET /api/capacity|bottlenecks|schedule|risk/delay|risk/downtime|risk/orders|demand|demand/stockout|demand/regions`,
+`POST /api/actions/execute`.
+
+## Deploy with Docker (models baked into the image)
+```bash
+# build context = this folder
+docker build -t production-planner .
+docker run -p 8000:8000 \
+  -e AZURE_OPENAI_API_KEY=your-key \
+  -e AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/ \
+  production-planner
+```
+Models are trained at **build time**, so the container starts instantly. Secrets are passed at
+runtime (never baked in). For the frontend, run `npm run build` and serve `frontend/dist/` from
+any static host (point it at the backend URL).
+
+## Regenerate data / retrain (optional)
+```bash
+cd backend
+python data/generate_dataset.py     # regenerate the star-schema CSVs
+python data/validate_dataset.py     # integrity check (must PASS)
+python -m app.ml.train              # retrain all models
+# or simply:  python -m app.setup --force
+```
+
+## Tests
 ```bash
 cd backend
 python -m pytest -q
 ```
 
 ## Configuration
-Copy `.env.example` to `.env` (repo root) and fill in Azure OpenAI + SMTP if desired.
+Copy `.env.example` to `.env` (in this folder) and fill in Azure OpenAI + SMTP if desired.
 Without an Azure key the system still works (deterministic router). Without SMTP the email
 action runs in simulation mode (writes to a local outbox). Secrets are read from the
 environment and never committed or logged.

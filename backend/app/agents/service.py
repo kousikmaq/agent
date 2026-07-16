@@ -24,9 +24,13 @@ async def answer(query: str, use_cache: bool = True) -> dict:
     if not query:
         return {"query": query, "error": "empty query"}
 
+    # Cache LLM answers and router (no-key) answers separately, so enabling the LLM never
+    # returns a stale router-mode answer.
+    namespace = "answer_llm" if azure_available() else "answer_router"
+
     cache = get_cache()
     if use_cache:
-        hit = cache.get(query, namespace="answer")
+        hit = cache.get(query, namespace=namespace)
         if hit is not None:
             hit["cached"] = True
             return hit
@@ -45,5 +49,5 @@ async def answer(query: str, use_cache: bool = True) -> dict:
         "llm_used": azure_available(),
         "cached": False,
     }
-    cache.set(query, result, namespace="answer")
+    cache.set(query, result, namespace=namespace)
     return result

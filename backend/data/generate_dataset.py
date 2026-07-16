@@ -269,7 +269,10 @@ def build_fact_job_operations(orders: pd.DataFrame, workers: pd.DataFrame) -> pd
             sched_end = sched_start + timedelta(hours=proc_hours)
 
             reliability = MACH_RELIABILITY[machine]
-            downtime_minutes = float(max(0.0, rng.normal(18 * (1 - reliability) * 6, 8)))
+            # downtime driven by machine reliability + shift + operation + load (learnable)
+            op_factor = {"OP10": 4, "OP20": 3, "OP30": 6, "OP40": 8, "OP50": 5, "OP60": 7}.get(op_id, 5)
+            dt_mean = 25.0 * (1 - reliability) + (10.0 if shift == "S3" else 0.0) + op_factor + 0.8 * proc_hours
+            downtime_minutes = float(max(0.0, rng.normal(dt_mean, 4)))
             downtime_minutes = round(min(downtime_minutes, 120.0), 1)
 
             # ----- injected delay-risk latent score (features clearly drive it) -----
@@ -349,49 +352,58 @@ def build_fact_job_operations(orders: pd.DataFrame, workers: pd.DataFrame) -> pd
 
 
 def build_fact_machine_sensor() -> pd.DataFrame:
-    """600 readings. Faulty readings show a clear degraded signature (high temps/vibration,
-    low pressures) and get downtime_flag=1; healthy readings are clearly separated. A small
-    (~5%) label flip keeps it non-trivial. More-degraded machines fault more often, so
-    machine_id is also informative."""
+    """600 readings. Faulty readings carry a DISTINCT fault-type signature (only the relevant
+    sensor group spikes) so both downtime_flag AND failure_type are learnable. A small (~5%)
+    label flip keeps it non-trivial. More-degraded machines fault more often."""
+    fault_types = ["Overheating", "Vibration", "PressureLoss", "Electrical", "ToolWear"]
     rows = []
     n_per_machine = 120
     eid = 0
     for (mid, _nm, _ln, _ops, _rate, _en, reliability) in MACHINES:
-        base_deg = 1 - reliability                 # 0.07 .. 0.15
-        p_fault = 0.15 + 1.0 * base_deg            # ~0.22 .. 0.30
+        base_deg = 1 - reliability
+        p_fault = 0.15 + 1.0 * base_deg
         t = datetime(2025, 5, 1, 6, 0, 0)
         for _ in range(n_per_machine):
             eid += 1
             t += timedelta(hours=float(rng.uniform(4, 10)))
+            # healthy baseline
+            hyd_p = rng.normal(122 - base_deg * 10, 8)
+            cool_p = rng.normal(6.6, 0.4)
+            air_p = rng.normal(6.4, 0.4)
+            cool_t = rng.normal(23, 3)
+            hyd_t = rng.normal(44, 4)
+            bearing_t = rng.normal(32, 4)
+            spin_vib = rng.normal(1.2, 0.3)
+            tool_vib = rng.normal(25, 3)
+            rpm = rng.normal(22500, 1500)
+            volt = rng.normal(340, 15)
+            torque = rng.normal(19, 3)
+            cutting = rng.normal(3.1, 0.4)
+
             is_fault = rng.random() < p_fault
+            ftype = "None"
             if is_fault:
-                hyd_p = rng.normal(85, 8)
-                cool_p = rng.normal(4.8, 0.4)
-                air_p = rng.normal(4.9, 0.4)
-                cool_t = rng.normal(40, 4)
-                hyd_t = rng.normal(72, 5)
-                bearing_t = rng.normal(60, 5)
-                spin_vib = rng.normal(3.4, 0.5)
-                tool_vib = rng.normal(40, 4)
-                rpm = rng.normal(17000, 1500)
-                torque = rng.normal(30, 4)
-                cutting = rng.normal(4.6, 0.5)
-            else:
-                hyd_p = rng.normal(122 - base_deg * 10, 8)
-                cool_p = rng.normal(6.6, 0.4)
-                air_p = rng.normal(6.4, 0.4)
-                cool_t = rng.normal(23, 3)
-                hyd_t = rng.normal(44, 4)
-                bearing_t = rng.normal(32, 4)
-                spin_vib = rng.normal(1.2, 0.3)
-                tool_vib = rng.normal(25, 3)
-                rpm = rng.normal(22500, 1500)
-                torque = rng.normal(19, 3)
-                cutting = rng.normal(3.1, 0.4)
+                ftype = str(rng.choice(fault_types))
+                if ftype == "Overheating":
+                    hyd_t = rng.normal(72, 4); bearing_t = rng.normal(60, 4); cool_t = rng.normal(40, 3)
+                elif ftype == "Vibration":
+                    spin_vib = rng.normal(3.6, 0.4); tool_vib = rng.normal(42, 3)
+                elif ftype == "PressureLoss":
+                    hyd_p = rng.normal(85, 6); cool_p = rng.normal(4.6, 0.3); air_p = rng.normal(4.8, 0.3)
+                elif ftype == "Electrical":
+                    volt = rng.normal(402, 15); torque = rng.normal(31, 3); rpm = rng.normal(17000, 1200)
+                else:  # ToolWear
+                    tool_vib = rng.normal(40, 3); torque = rng.normal(29, 3)
+                    cutting = rng.normal(4.7, 0.4); hyd_t = rng.normal(55, 3)
 
             downtime = 1 if is_fault else 0
-            if rng.random() < 0.05:               # small label noise
+            if rng.random() < 0.05:
                 downtime = 1 - downtime
+            if downtime == 1 and ftype == "None":
+                ftype = str(rng.choice(fault_types))
+            if downtime == 0:
+                ftype = "None"
+
             rows.append({
                 "event_id": f"EVT{eid:05d}",
                 "reading_time": ts(t),
@@ -405,11 +417,12 @@ def build_fact_machine_sensor() -> pd.DataFrame:
                 "spindle_vibration_um": round(float(spin_vib), 3),
                 "tool_vibration_um": round(float(tool_vib), 2),
                 "spindle_speed_rpm": int(max(0, rpm)),
-                "voltage_v": round(float(rng.normal(340, 20)), 1),
+                "voltage_v": round(float(volt), 1),
                 "torque_nm": round(float(torque), 2),
                 "cutting_force_kn": round(float(cutting), 2),
                 "machine_status": "DOWN" if downtime else "RUNNING",
                 "downtime_flag": downtime,
+                "failure_type": ftype,
             })
     return pd.DataFrame(rows)
 
@@ -425,7 +438,10 @@ def build_fact_demand(products: pd.DataFrame) -> pd.DataFrame:
         inv = float(rng.uniform(800, 1600))
         unit_cost = round(float(rng.uniform(8, 20)), 2)
         unit_price = round(unit_cost * float(rng.uniform(1.3, 1.8)), 2)
-        reorder = int(base * 3)
+        reorder = int(base * 4)
+        order_qty = int(base * 8)
+        lead_days = int(rng.integers(3, 8))
+        pending_arrival = None  # (arrival_day, qty)
         for day in range(60):
             dt = start + timedelta(days=day)
             dow = dt.weekday()
@@ -434,8 +450,18 @@ def build_fact_demand(products: pd.DataFrame) -> pd.DataFrame:
             promo_lift = 1.0 + (0.5 if promo else 0.0)
             noise = float(rng.normal(1.0, 0.12))
             units = max(0, int(base * (1 + trend * day / 60.0) * seasonal * promo_lift * noise))
-            inv = max(0.0, inv - units + (float(rng.uniform(0, 300)) if day % 7 == 0 else 0.0))
-            stockout = int(inv <= 0)
+
+            # receive a pending replenishment when it arrives
+            if pending_arrival is not None and day >= pending_arrival[0]:
+                inv += pending_arrival[1]
+                pending_arrival = None
+            # sell; stockout only when demand exceeds stock on hand (e.g. during lead time)
+            stockout = int(units > inv)
+            inv = max(0.0, inv - units)
+            # reorder policy: order when below reorder point and none in transit
+            if inv < reorder and pending_arrival is None:
+                pending_arrival = (day + lead_days, order_qty)
+
             rows.append({
                 "demand_date": d(dt),
                 "product_id": prod["product_id"],
@@ -444,7 +470,7 @@ def build_fact_demand(products: pd.DataFrame) -> pd.DataFrame:
                 "units_sold": units,
                 "inventory_level": int(inv),
                 "reorder_point": reorder,
-                "order_quantity": int(base * 4),
+                "order_quantity": order_qty,
                 "unit_cost": unit_cost,
                 "unit_price": unit_price,
                 "promotion_flag": promo,

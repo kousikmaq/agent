@@ -91,3 +91,87 @@ def time_split(frame: pd.DataFrame, test_frac: float = 0.2) -> tuple[pd.DataFram
     train = frame[frame["demand_date"] < cutoff]
     test = frame[frame["demand_date"] >= cutoff]
     return train, test
+
+
+# ---------------------------------------------------------------------------
+# 4) Duration / cycle-time regressor  (target: processing_hours)
+#    Predicts how long an operation will REALLY take, so capacity/bottleneck use
+#    expected actual durations instead of nominal standard times.
+# ---------------------------------------------------------------------------
+DURATION_NUMERIC = ["batch_quantity", "sequence", "experience_years", "hourly_cost_inr"]
+DURATION_CATEGORICAL = ["machine_id", "operation_id", "product_id", "shift_id"]
+DURATION_TARGET = "processing_hours"
+
+
+def duration_feature_matrix(jobs: pd.DataFrame) -> pd.DataFrame:
+    """Feature columns for the duration model (training and live inference)."""
+    workers = da.workers()[["worker_id", "experience_years", "hourly_cost_inr"]]
+    df = jobs.merge(workers, on="worker_id", how="left")
+    return df[DURATION_NUMERIC + DURATION_CATEGORICAL].copy()
+
+
+def build_duration_features() -> tuple[pd.DataFrame, pd.Series]:
+    jobs = da.job_operations()
+    X = duration_feature_matrix(jobs)
+    y = jobs[DURATION_TARGET].copy()
+    return X, y
+
+
+# ---------------------------------------------------------------------------
+# 5) Delay DURATION (how late, hours) + delay CAUSE  (late operations only)
+# ---------------------------------------------------------------------------
+def _late_jobs() -> pd.DataFrame:
+    jobs = da.job_operations()
+    late = jobs[jobs["job_status"] != "On-Time"].copy()
+    late["delay_hours"] = (
+        (late["actual_end"] - late["scheduled_end"]).dt.total_seconds() / 3600.0
+    ).clip(lower=0)
+    return late
+
+
+def build_delay_duration_features() -> tuple[pd.DataFrame, pd.Series]:
+    late = _late_jobs()
+    return delay_feature_matrix(late), late["delay_hours"]
+
+
+# ---------------------------------------------------------------------------
+# 6) Downtime DURATION (minutes) + FAILURE TYPE
+# ---------------------------------------------------------------------------
+def build_downtime_duration_features() -> tuple[pd.DataFrame, pd.Series]:
+    jobs = da.job_operations()
+    d = jobs[jobs["downtime_minutes"] > 0].copy()
+    # use the duration feature set (job/machine context) - NOT the delay set, which
+    # contains downtime_minutes itself and would leak the target.
+    return duration_feature_matrix(d), d["downtime_minutes"]
+
+
+FAILURE_TYPE_TARGET = "failure_type"
+
+
+def build_failure_type_features() -> tuple[pd.DataFrame, pd.Series]:
+    sensor = da.machine_sensor()
+    faults = sensor[sensor["downtime_flag"] == 1].copy()
+    X = faults[SENSOR_NUMERIC + SENSOR_CATEGORICAL]
+    return X, faults[FAILURE_TYPE_TARGET]
+
+
+# ---------------------------------------------------------------------------
+# 7) Demand STOCKOUT (classification) - reuses the demand frame + inventory state
+# ---------------------------------------------------------------------------
+STOCKOUT_NUMERIC = ["day_of_week", "month", "promotion_flag", "lag_1", "lag_7",
+                    "roll7_mean", "inventory_level", "reorder_point"]
+STOCKOUT_CATEGORICAL = ["product_id"]
+STOCKOUT_TARGET = "stockout_next"
+
+
+def build_stockout_frame() -> pd.DataFrame:
+    """Predict NEXT day's stockout from today's inventory state (a real forecast, not the
+    same-day circular label)."""
+    d = build_demand_frame()
+    d["inventory_level"] = d["inventory_level"].astype(float)
+    d["reorder_point"] = d["reorder_point"].astype(float)
+    d[STOCKOUT_TARGET] = d.groupby("product_id")["stockout_flag"].shift(-1)
+    d = d.dropna(subset=[STOCKOUT_TARGET]).reset_index(drop=True)
+    d[STOCKOUT_TARGET] = d[STOCKOUT_TARGET].astype(int)
+    return d
+

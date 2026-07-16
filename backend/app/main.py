@@ -3,6 +3,8 @@ confirmed action-execute endpoint (human-in-the-loop). CORS is restricted to con
 origins; all request bodies are validated by Pydantic."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,7 +24,23 @@ from app.config import settings
 from app.ml import explain, registry
 from app.optimization.scheduler import compare_scenarios, optimize_schedule
 
-app = FastAPI(title="Production Planning & Schedule Optimization Agent", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # On first boot, generate data + train models if missing (no-op once ready).
+    if settings.auto_setup:
+        try:
+            from app.setup import ensure_ready
+            ensure_ready()
+        except Exception as exc:  # noqa: BLE001 - never block startup on setup issues
+            print(f"[startup] auto-setup skipped: {type(exc).__name__}: {exc}")
+    yield
+
+
+app = FastAPI(
+    title="Production Planning & Schedule Optimization Agent",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -117,9 +135,24 @@ def api_downtime() -> dict:
     return _safe(explain.explain_downtime)
 
 
+@app.get("/api/risk/orders")
+def api_order_risk(top_n: int = 10) -> dict:
+    return _safe(registry.predict_order_due_risk, top_n)
+
+
 @app.get("/api/demand")
 def api_demand(horizon_days: int = 7) -> dict:
     return _safe(explain.explain_demand, horizon_days)
+
+
+@app.get("/api/demand/stockout")
+def api_stockout(top_n: int = 10) -> dict:
+    return _safe(registry.demand_stockout_risk, top_n)
+
+
+@app.get("/api/demand/regions")
+def api_regions() -> dict:
+    return _safe(registry.demand_region_split)
 
 
 @app.get("/api/reorder/recommendations")

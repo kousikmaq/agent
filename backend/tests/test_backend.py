@@ -46,12 +46,30 @@ def test_models_available_and_metrics():
     assert m["delay_risk"]["macro_f1"] >= 0.7
     assert m["downtime"]["f1"] >= 0.7
     assert m["demand"]["mape_pct"] < m["demand"]["baseline_mape_pct"]
+    # added targets
+    assert m["duration"]["r2"] > 0.3
+    assert m["downtime_duration"]["r2"] > 0.3
+    assert m["failure_type"]["macro_f1"] >= 0.6
+    assert m["demand_quantiles"]["p10_p90_coverage"] >= 0.7
+    assert m["stockout"]["f1"] >= 0.6
 
 
 def test_predictions_run():
     assert "at_risk" in registry.predict_delay_for_pending(top_n=5)
     assert "machines" in registry.predict_downtime_latest()
     assert registry.forecast_demand(7)["products"]
+
+
+def test_new_target_outputs():
+    d = registry.predict_delay_for_pending(top_n=3)["at_risk"][0]
+    assert "expected_delay_days" in d and "likely_cause" in d and "p90_delay_hours" in d
+    assert "at_risk_orders" in registry.predict_order_due_risk(5)
+    m = registry.predict_downtime_latest()["machines"][0]
+    assert "health_index" in m and "failure_type" in m and "anomaly_score" in m
+    f = registry.forecast_demand(7)["products"][0]
+    assert "p10_units_total" in f and "p90_units_total" in f and "forecast_revenue" in f
+    assert "products" in registry.demand_stockout_risk(3)
+    assert "region_share_pct" in registry.demand_region_split()
 
 
 # ---- optimization ----
