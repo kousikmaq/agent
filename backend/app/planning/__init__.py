@@ -10,12 +10,17 @@ scheduler), materials to re-order, due-date risk and machine downtime risk.
 """
 from __future__ import annotations
 
+import json
+import os
+import re
+
 import pandas as pd
 
 from app.analytics._util import planning_now
 from app.analytics.capacity import capacity_analysis
 from app.actions.reorder_action import reorder_recommendations
 from app.cache.semantic_cache import _data_version
+from app.config import EXPORTS_DIR
 from app.ml import registry
 from app.optimization.scheduler import optimize_schedule
 
@@ -23,6 +28,34 @@ HORIZON_DAYS = 7
 MAX_ORDERS = 15
 
 _CACHE: dict = {}
+_PLAN_DIR = os.path.join(EXPORTS_DIR, "plan_cache")
+os.makedirs(_PLAN_DIR, exist_ok=True)
+
+
+def _disk_path(scenario: str) -> str:
+    # Sanitise scenario so it can never escape the cache directory (no path traversal).
+    safe = re.sub(r"[^a-z_]", "", (scenario or "").lower())[:24] or "default"
+    return os.path.join(_PLAN_DIR, f"plan_{_data_version()}_{safe}.json")
+
+
+def _load_disk(scenario: str) -> dict | None:
+    path = _disk_path(scenario)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:  # noqa: BLE001 - a corrupt cache just triggers a rebuild
+        return None
+
+
+def _save_disk(scenario: str, plan: dict) -> None:
+    try:
+        with open(_disk_path(scenario), "w", encoding="utf-8") as fh:
+            json.dump(plan, fh)
+    except Exception:  # noqa: BLE001 - never fail a request on a cache-write issue
+        pass
+
 
 
 def build_weekly_plan(scenario: str = "min_risk") -> dict:
@@ -110,15 +143,25 @@ def build_weekly_plan(scenario: str = "min_risk") -> dict:
 
 
 def get_weekly_plan(scenario: str = "min_risk", force: bool = False) -> dict:
-    """Cached weekly plan (regenerates only when data changes or force=True)."""
+    """Weekly plan, built once and persisted. It is reused from memory, then from disk, and is
+    only rebuilt when the data changes or the user explicitly regenerates (force=True)."""
     from app.logging_config import log
     key = (_data_version(), scenario)
-    if not force and key in _CACHE:
-        log.info("PLAN   cache hit (scenario=%s)", scenario)
-        return {**_CACHE[key], "cached": True}
+
+    if not force:
+        if key in _CACHE:
+            log.info("PLAN   cache hit (memory, scenario=%s)", scenario)
+            return {**_CACHE[key], "cached": True}
+        disk = _load_disk(scenario)
+        if disk is not None:
+            log.info("PLAN   cache hit (disk, scenario=%s)", scenario)
+            _CACHE[key] = disk
+            return {**disk, "cached": True}
+
     log.info("PLAN   building weekly master plan (scenario=%s) - running OR-Tools + models...", scenario)
     plan = build_weekly_plan(scenario)
     log.info("PLAN   done: %d orders, %d operations, %d materials to re-order",
              plan["kpis"]["orders_planned"], plan["kpis"]["operations"], len(plan["materials_to_reorder"]))
     _CACHE[key] = plan
+    _save_disk(scenario, plan)
     return {**plan, "cached": False}

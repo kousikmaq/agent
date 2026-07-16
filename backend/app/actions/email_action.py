@@ -2,6 +2,8 @@
 local outbox (simulation mode). Recipient is validated; credentials are never logged."""
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -15,6 +17,8 @@ from app.config import EXPORTS_DIR, OUTBOX_DIR, settings
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SUBJECT = 200
 MAX_BODY = 10000
+MAX_IMAGE_BYTES = 6_000_000
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _OUTBOX = os.path.join(OUTBOX_DIR, "email_outbox.jsonl")
 
 
@@ -81,3 +85,23 @@ def send_alert_email(subject: str, body: str, to: str | None = None,
                 "attachment": record["attachment"]}
     except Exception as exc:  # noqa: BLE001 - surface a safe message, no secrets
         return {"status": "error", "error": f"send failed: {type(exc).__name__}"}
+
+
+def send_image_email(subject: str, body: str, to: str | None, image_base64: str) -> dict:
+    """Decode a client-captured PNG (base64 or data URL), save it under EXPORTS_DIR with a
+    server-generated name, and email it as an attachment. Path is never client-controlled."""
+    raw = (image_base64 or "").split(",", 1)[-1].strip()
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        return {"status": "error", "error": "invalid image data"}
+    if not data.startswith(_PNG_MAGIC):
+        return {"status": "error", "error": "image must be a PNG"}
+    if len(data) > MAX_IMAGE_BYTES:
+        return {"status": "error", "error": "image too large"}
+
+    fname = f"insights_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+    with open(os.path.join(EXPORTS_DIR, fname), "wb") as fh:
+        fh.write(data)
+    return send_alert_email(subject or "Production insights", body or "Please find the attached insights report.",
+                            to, attachment=fname)

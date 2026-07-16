@@ -73,3 +73,7 @@ export function getAllocation() {
   return fetch("/api/allocation").then(json);
 }
 
+export function getInsights() {
+  return fetch("/api/insights").then(json);
+}
+

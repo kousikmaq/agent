@@ -28,6 +28,25 @@ function ViewError({ msg }) {
   return <div className="view-error">Could not load: {msg}</div>;
 }
 
+const ABOUT = {
+  dashboard: "This is your weekly control center. The plan card shows the optimised production plan; the tiles summarise capacity, bottlenecks, delay and downtime risk, demand and materials; and the alert center lists the actions worth taking now. Tap any tile to dive in, or ask Copilot about it.",
+  plan: "The master plan is produced by the OR-Tools optimiser for the selected scenario. Compare scenarios to see the trade-off between throughput, on-time delivery (risk) and energy cost, then export the plan or ask Copilot which scenario best fits your goal.",
+  schedule: "This Gantt shows exactly when each operation runs on each machine for the chosen scenario. Bars are operations coloured by order — longer bars take longer. Use it to spot machine congestion and see how switching scenario re-sequences the line.",
+  machines: "Each card shows how loaded a machine is (utilisation) and how healthy it is (an ML downtime score, 0–100). Red means over-capacity or likely to fail, with the predicted fault type when sensors flag a risk. Prioritise maintenance on machines with low health and high load.",
+  orders: "Orders are ranked by priority (urgency, importance and value) and scored for delay risk by the ML model. 'Days over' estimates how late an order may finish and 'Miss due?' flags likely due-date breaches. Start with the highest-priority, highest-risk orders.",
+  demand: "The forecast shows expected demand per product for the next 7 days with a P10–P90 confidence band (the likely low-to-high range). Stockout chips flag products likely to run out, and the reorder cards suggest quantities to buy — one click raises a purchase order.",
+  workforce: "This compares the worker-hours available for each skill against the hours the plan needs. A coverage ratio above 1.0 means you have enough people; higher is more headroom. Watch any skill trending toward tight coverage before it becomes a bottleneck.",
+};
+
+function ViewAbout({ k }) {
+  return (
+    <div className="view-about">
+      <span className="va-icon">ℹ️</span>
+      <p>{ABOUT[k]}</p>
+    </div>
+  );
+}
+
 /* ------------------------------ shared viz ------------------------------ */
 export function Ring({ value, label, sub, tone = "green", max = 100 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
@@ -47,12 +66,6 @@ export function Ring({ value, label, sub, tone = "green", max = 100 }) {
       <div className="ring-meta"><div className="ring-label">{label}</div>{sub && <div className="ring-sub">{sub}</div>}</div>
     </div>
   );
-}
-
-function Bar({ value, max, tone }) {
-  const pct = Math.max(2, Math.min(100, (value / max) * 100));
-  const bg = tone === "rose" ? "var(--rose)" : tone === "amber" ? "var(--amber)" : "var(--green)";
-  return <div className="hbar"><div className="hbar-fill" style={{ width: `${pct}%`, background: bg }} /></div>;
 }
 
 /* ------------------------------ Feature tiles ------------------------------ */
@@ -120,6 +133,7 @@ export function Dashboard({ plan, onNav, onAsk, onAction }) {
         ))}
       </div>
       <AlertCenter plan={plan} onAction={onAction} onNav={onNav} />
+      <ViewAbout k="dashboard" />
     </div>
   );
 }
@@ -222,6 +236,7 @@ export function PlanView({ plan, scenario }) {
           <div key={i} className="li-row"><b>{m.material_id}</b><span>× {m.suggested_quantity}</span></div>
         ))}
       </div>
+      <ViewAbout k="plan" />
     </div>
   );
 }
@@ -295,6 +310,7 @@ export function ScheduleGantt({ scenario }) {
         ))}
       </div>
       <div className="gantt-note">Bars are scheduled operations. Hover a bar for order, time, workers and energy. Multi-machine ops appear on each machine.</div>
+      <ViewAbout k="schedule" />
     </div>
   );
 }
@@ -336,6 +352,7 @@ export function MachinesView({ onAsk }) {
           );
         })}
       </div>
+      <ViewAbout k="machines" />
     </div>
   );
 }
@@ -380,6 +397,7 @@ export function OrdersView() {
           </tbody>
         </table>
       </div>
+      <ViewAbout k="orders" />
     </div>
   );
 }
@@ -446,6 +464,7 @@ export function DemandView({ onAction }) {
         ))}
         {(recs.recommendations || []).length === 0 && <div className="all-clear">Stock levels OK.</div>}
       </div>
+      <ViewAbout k="demand" />
     </div>
   );
 }
@@ -457,26 +476,39 @@ export function WorkforceView() {
   useEffect(() => { getAllocation().then(setData).catch((e) => setErr(String(e))); }, []);
   if (err) return <ViewError msg={err} />;
   if (!data) return <div className="view"><h3 className="section-h">Workforce</h3><Loading /></div>;
-  const maxReq = Math.max(1, ...(data.skill_coverage || []).map((s) => s.available_worker_hours));
+  const cov = data.skill_coverage || [];
+  const gaps = data.skill_gaps?.length || 0;
+  const maxLoad = Math.max(1, ...cov.map((s) => s.required_worker_hours));
   return (
     <div className="view">
-      <h3 className="section-h">Skill coverage {data.skill_gaps?.length ? "" : "· all covered"}</h3>
-      <div className="skill-list">
-        {(data.skill_coverage || []).map((s) => {
-          const tone = s.status === "OK" ? "green" : "rose";
+      <h3 className="section-h">
+        Skill coverage
+        <span className={`wf-headline ${gaps ? "rose" : "green"}`}>{gaps ? `${gaps} gap(s)` : "all skills covered"}</span>
+      </h3>
+      <div className="wf-grid">
+        {cov.map((s) => {
+          const tone = s.coverage_ratio >= 2 ? "green" : s.coverage_ratio >= 1 ? "amber" : "rose";
+          const status = s.coverage_ratio >= 2 ? "Healthy" : s.coverage_ratio >= 1 ? "Tight" : "Short";
+          const loadPct = Math.min(100, (s.required_worker_hours / s.available_worker_hours) * 100);
           return (
-            <div key={s.skill} className="skill-row">
-              <div className="skill-name">{s.skill}</div>
-              <div className="skill-bars">
-                <Bar value={s.available_worker_hours} max={maxReq} tone={tone} />
-                <div className="skill-req" style={{ left: `${(s.required_worker_hours / maxReq) * 100}%` }} title="required hours" />
+            <div key={s.skill} className={`wf-card ${tone}`}>
+              <div className="wf-top">
+                <span className="wf-skill">{s.skill}</span>
+                <span className={`wf-badge ${tone}`}>{status}</span>
               </div>
-              <div className="skill-meta">{s.coverage_ratio}× · {s.available_workers} workers</div>
+              <div className="wf-ratio">{s.coverage_ratio}× <span>coverage</span></div>
+              <div className="wf-bar" title={`${Math.round(loadPct)}% of available hours used`}>
+                <div className={`wf-fill ${tone}`} style={{ width: `${loadPct}%` }} />
+              </div>
+              <div className="wf-meta">
+                <span>{s.available_workers} workers</span>
+                <span>needs {Math.round(s.required_worker_hours)}h of {Math.round(s.available_worker_hours)}h</span>
+              </div>
             </div>
           );
         })}
       </div>
-      <div className="legend">Bar = available worker-hours · marker = required hours · coverage ratio shown right.</div>
+      <ViewAbout k="workforce" />
     </div>
   );
 }

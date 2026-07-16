@@ -9,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.actions.chart_action import generate_chart
-from app.actions.email_action import send_alert_email
+from app.actions.email_action import send_alert_email, send_image_email
 from app.actions.export_action import export_schedule
 from app.actions.reorder_action import place_reorder, reorder_recommendations
 from app.agents.chat_client import azure_available
@@ -210,6 +210,13 @@ def api_metrics() -> dict:
     return registry.metrics()
 
 
+@app.get("/api/insights")
+def api_insights() -> dict:
+    """High-level, chart-ready weekly insights + narrative for the insights report view."""
+    from app.actions.insights_action import build_insights
+    return _safe(build_insights)
+
+
 # ---- weekly master plan (proactive baseline) ------------------------------
 @app.get("/api/plan")
 def api_plan(scenario: str = "min_risk") -> dict:
@@ -224,13 +231,15 @@ def api_plan_regenerate(scenario: str = "min_risk") -> dict:
 
 
 # ---- confirmed actions (human-in-the-loop) --------------------------------
-_ACTIONS = {"send_email", "place_reorder", "generate_chart", "export_plan", "email_chart"}
+_ACTIONS = {"send_email", "place_reorder", "generate_chart", "export_plan", "email_chart", "email_image"}
 
 
 @app.post("/api/actions/execute")
 def execute_action(req: ActionRequest) -> dict:
     aid, p = req.id, req.params
-    log.info("ACTION requested id=%s params=%s", aid, {k: p.get(k) for k in list(p)[:4]})
+    _safe_params = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 80 else v)
+                    for k, v in list(p.items())[:4]}
+    log.info("ACTION requested id=%s params=%s", aid, _safe_params)
     if aid not in _ACTIONS:
         log.warning("ACTION rejected: unknown id=%s", aid)
         return {"status": "error", "error": f"unknown action '{aid}'"}
@@ -242,6 +251,10 @@ def execute_action(req: ActionRequest) -> dict:
             p.get("subject", "Production insight chart"),
             p.get("body", "Please find the attached production insight chart."),
             p.get("to"), attachment=p.get("filename"))
+    elif aid == "email_image":
+        res = send_image_email(p.get("subject", "Production insights"),
+                               p.get("body", "Please find the attached insights report."),
+                               p.get("to"), p.get("image_base64", ""))
     elif aid == "place_reorder":
         res = place_reorder(p.get("material_id", ""), p.get("quantity", 0), p.get("reason", ""))
     elif aid == "generate_chart":
