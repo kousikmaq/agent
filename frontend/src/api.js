@@ -20,3 +20,11 @@ export function executeAction(id, params) {
     body: JSON.stringify({ id, params }),
   }).then(json);
 }
+
+export function getPlan(scenario = "min_risk") {
+  return fetch(`/api/plan?scenario=${scenario}`).then(json);
+}
+
+export function regeneratePlan(scenario = "min_risk") {
+  return fetch(`/api/plan/regenerate?scenario=${scenario}`, { method: "POST" }).then(json);
+}

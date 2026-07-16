@@ -133,3 +133,13 @@ def test_api_websocket():
         ws.send_json({"query": "capacity status", "use_cache": False})
         assert ws.receive_json()["type"] == "status"
         assert ws.receive_json()["type"] == "answer"
+
+
+def test_weekly_plan():
+    from app.planning import get_weekly_plan
+    p = get_weekly_plan()
+    assert p["kpis"]["orders_planned"] > 0
+    assert p["schedule"] and "materials_to_reorder" in p
+    assert p["capacity"]["verdict"] and "demand" in p and "risk" in p
+    r = client.get("/api/plan").json()
+    assert r["headline"] and r["kpis"]["orders_planned"] > 0

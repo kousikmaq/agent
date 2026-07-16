@@ -46,10 +46,34 @@ def route(query: str) -> dict:
 
     if intent == "capacity":
         data = T.tool_capacity_analysis()
+        constrained = data.get("constrained_machines", [])
         headline = f"Overall utilisation {data['overall_utilization_pct']:.0f}%. {data['verdict']}"
-        details = [f"{m['machine_id']} {m['machine_name']}: {m['utilization_pct']:.0f}% ({m['status']})"
-                   for m in data["per_machine"]]
+        details = [
+            f"{m['machine_id']} {m['machine_name']}: {m['utilization_pct']:.0f}% ({m['status']}"
+            + (f", shortfall {m['expected_shortfall_hours']:.0f}h" if m.get("expected_shortfall_hours", 0) > 0 else "")
+            + ")"
+            for m in data["per_machine"]
+        ]
         actions = [_chart_action("capacity", "Show utilisation chart")]
+        if constrained:
+            # over/near capacity -> run OR-Tools to actually produce an optimized plan
+            overtime = data.get("total_expected_shortfall_hours", 0)
+            plan = T.tool_optimize_schedule("min_risk")          # OR-Tools CP-SAT
+            k = plan.get("kpis", {})
+            data = {"capacity": data, "optimized_plan": plan}
+            details.append(
+                f"{len(constrained)} machine(s) over/near capacity ({', '.join(constrained)}); "
+                f"~{overtime:.0f}h overtime needed.")
+            details.append(
+                f"OR-Tools optimized (min-risk) plan generated: {plan.get('scheduled_orders', 0)} orders, "
+                f"makespan {k.get('makespan_hours')}h, tardiness {k.get('total_tardiness_hours')}h, "
+                f"cost Rs{k.get('total_energy_cost_inr')}.")
+            actions = [
+                {"id": "export_plan", "label": "Export this OR-Tools optimized plan (CSV)",
+                 "params": {"scenario": "min_risk"}},
+                _chart_action("capacity", "Show utilisation chart"),
+                _email_action("Machines over capacity - action needed", details),
+            ]
         agent = "Capacity & Scheduling"
 
     elif intent == "bottleneck":

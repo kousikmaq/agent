@@ -21,19 +21,29 @@ from app.analytics.prioritization import prioritize_orders
 from app.api_schemas import ActionRequest, ChatRequest
 from app.cache.semantic_cache import get_cache
 from app.config import settings
+from app.logging_config import log, setup_logging
 from app.ml import explain, registry
 from app.optimization.scheduler import compare_scenarios, optimize_schedule
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # On first boot, generate data + train models if missing (no-op once ready).
+    setup_logging()
+    log.info("=" * 60)
+    log.info("STARTUP Production Planning & Schedule Optimization Agent")
+    log.info("STARTUP LLM configured: %s", azure_available())
     if settings.auto_setup:
         try:
             from app.setup import ensure_ready
+            log.info("STARTUP checking dataset + trained models...")
             ensure_ready()
+            log.info("STARTUP data + models ready")
         except Exception as exc:  # noqa: BLE001 - never block startup on setup issues
-            print(f"[startup] auto-setup skipped: {type(exc).__name__}: {exc}")
+            log.warning("STARTUP auto-setup skipped: %s: %s", type(exc).__name__, exc)
+    log.info("STARTUP ready - serving on the configured port")
+    log.info("=" * 60)
     yield
+    log.info("SHUTDOWN server stopping")
 
 
 app = FastAPI(
@@ -165,6 +175,19 @@ def api_metrics() -> dict:
     return registry.metrics()
 
 
+# ---- weekly master plan (proactive baseline) ------------------------------
+@app.get("/api/plan")
+def api_plan(scenario: str = "min_risk") -> dict:
+    from app.planning import get_weekly_plan
+    return _safe(get_weekly_plan, scenario)
+
+
+@app.post("/api/plan/regenerate")
+def api_plan_regenerate(scenario: str = "min_risk") -> dict:
+    from app.planning import get_weekly_plan
+    return _safe(get_weekly_plan, scenario, True)
+
+
 # ---- confirmed actions (human-in-the-loop) --------------------------------
 _ACTIONS = {"send_email", "place_reorder", "generate_chart", "export_plan"}
 
@@ -172,14 +195,19 @@ _ACTIONS = {"send_email", "place_reorder", "generate_chart", "export_plan"}
 @app.post("/api/actions/execute")
 def execute_action(req: ActionRequest) -> dict:
     aid, p = req.id, req.params
+    log.info("ACTION requested id=%s params=%s", aid, {k: p.get(k) for k in list(p)[:4]})
     if aid not in _ACTIONS:
+        log.warning("ACTION rejected: unknown id=%s", aid)
         return {"status": "error", "error": f"unknown action '{aid}'"}
     if aid == "send_email":
-        return send_alert_email(p.get("subject", ""), p.get("body", ""), p.get("to"))
-    if aid == "place_reorder":
-        return place_reorder(p.get("material_id", ""), p.get("quantity", 0), p.get("reason", ""))
-    if aid == "generate_chart":
-        return generate_chart(p.get("kind", ""))
-    if aid == "export_plan":
-        return export_schedule(p.get("scenario", "min_risk"), int(p.get("max_orders", 12)))
-    return {"status": "error", "error": "unhandled action"}
+        res = send_alert_email(p.get("subject", ""), p.get("body", ""), p.get("to"))
+    elif aid == "place_reorder":
+        res = place_reorder(p.get("material_id", ""), p.get("quantity", 0), p.get("reason", ""))
+    elif aid == "generate_chart":
+        res = generate_chart(p.get("kind", ""))
+    elif aid == "export_plan":
+        res = export_schedule(p.get("scenario", "min_risk"), int(p.get("max_orders", 12)))
+    else:
+        res = {"status": "error", "error": "unhandled action"}
+    log.info("ACTION done id=%s -> status=%s", aid, res.get("status"))
+    return res
