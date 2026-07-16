@@ -1,0 +1,7 @@
+operation_id,operation_name,required_skill,min_workers,preferred_workers,eligible_machine_ids,sequence,standard_minutes
+OP10,Mixing,Mixing,1,2,M01;M02,10,45
+OP20,Blending,Blending,1,2,M01;M02,20,40
+OP30,Carbonation,Carbonation,1,1,M02;M03,30,30
+OP40,Filling,Filling,2,3,M03;M04,40,50
+OP50,Labeling,Labeling,1,2,M04;M05,50,25
+OP60,Packaging,Packaging,2,3,M05;M01,60,35

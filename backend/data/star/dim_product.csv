@@ -1,0 +1,41 @@
+product_id,product_name,flavor,size_ml,pack_type,base_material_id,min_batch_minutes,standard_unit_price
+PRD001,Cola 250ml Can,Cola,250,Can,MAT001,152,47.92
+PRD002,Orange 500ml PET Bottle,Orange,500,PET Bottle,MAT002,163,67.3
+PRD003,Lemon 250ml Glass Bottle,Lemon,250,Glass Bottle,MAT002,71,88.17
+PRD004,Mango 1000ml Can,Mango,1000,Can,MAT002,151,73.95
+PRD005,Apple 1000ml PET Bottle,Apple,1000,PET Bottle,MAT002,75,48.78
+PRD006,Ginger 1000ml Glass Bottle,Ginger,1000,Glass Bottle,MAT001,104,84.51
+PRD007,Berry 2000ml Can,Berry,2000,Can,MAT001,137,76.71
+PRD008,Lime 1000ml PET Bottle,Lime,1000,PET Bottle,MAT002,113,32.04
+PRD009,Cola 250ml Glass Bottle,Cola,250,Glass Bottle,MAT001,126,19.79
+PRD010,Orange 2000ml Can,Orange,2000,Can,MAT002,159,62.37
+PRD011,Lemon 250ml PET Bottle,Lemon,250,PET Bottle,MAT002,150,41.59
+PRD012,Mango 250ml Glass Bottle,Mango,250,Glass Bottle,MAT002,176,81.98
+PRD013,Apple 1000ml Can,Apple,1000,Can,MAT002,153,29.6
+PRD014,Ginger 500ml PET Bottle,Ginger,500,PET Bottle,MAT001,116,18.29
+PRD015,Berry 1000ml Glass Bottle,Berry,1000,Glass Bottle,MAT001,78,66.23
+PRD016,Lime 2000ml Can,Lime,2000,Can,MAT002,149,87.56
+PRD017,Cola 500ml PET Bottle,Cola,500,PET Bottle,MAT001,99,42.78
+PRD018,Orange 250ml Glass Bottle,Orange,250,Glass Bottle,MAT002,116,29.21
+PRD019,Lemon 500ml Can,Lemon,500,Can,MAT002,75,50.68
+PRD020,Mango 500ml PET Bottle,Mango,500,PET Bottle,MAT002,87,65.24
+PRD021,Apple 2000ml Glass Bottle,Apple,2000,Glass Bottle,MAT002,112,77.45
+PRD022,Ginger 1000ml Can,Ginger,1000,Can,MAT001,144,38.43
+PRD023,Berry 2000ml PET Bottle,Berry,2000,PET Bottle,MAT001,159,75.36
+PRD024,Lime 2000ml Glass Bottle,Lime,2000,Glass Bottle,MAT002,106,36.62
+PRD025,Cola 250ml Can,Cola,250,Can,MAT001,141,25.48
+PRD026,Orange 2000ml PET Bottle,Orange,2000,PET Bottle,MAT002,83,15.55
+PRD027,Lemon 2000ml Glass Bottle,Lemon,2000,Glass Bottle,MAT002,154,64.86
+PRD028,Mango 500ml Can,Mango,500,Can,MAT002,144,73.55
+PRD029,Apple 1000ml PET Bottle,Apple,1000,PET Bottle,MAT002,115,57.66
+PRD030,Ginger 250ml Glass Bottle,Ginger,250,Glass Bottle,MAT001,76,23.59
+PRD031,Berry 500ml Can,Berry,500,Can,MAT001,140,50.33
+PRD032,Lime 2000ml PET Bottle,Lime,2000,PET Bottle,MAT002,127,72.37
+PRD033,Cola 1000ml Glass Bottle,Cola,1000,Glass Bottle,MAT001,136,56.52
+PRD034,Orange 250ml Can,Orange,250,Can,MAT002,127,37.8
+PRD035,Lemon 1000ml PET Bottle,Lemon,1000,PET Bottle,MAT002,63,47.75
+PRD036,Mango 2000ml Glass Bottle,Mango,2000,Glass Bottle,MAT002,85,45.64
+PRD037,Apple 2000ml Can,Apple,2000,Can,MAT002,162,32.55
+PRD038,Ginger 2000ml PET Bottle,Ginger,2000,PET Bottle,MAT001,66,36.1
+PRD039,Berry 2000ml Glass Bottle,Berry,2000,Glass Bottle,MAT001,95,64.64
+PRD040,Lime 250ml Can,Lime,250,Can,MAT002,126,73.79
