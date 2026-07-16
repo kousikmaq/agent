@@ -36,13 +36,30 @@ def _safe_attachment(name: str | None) -> str | None:
     return path if os.path.isfile(path) else None
 
 
+def _format_body(subject: str, body: str) -> str:
+    """Wrap the message with a greeting and a professional signature so every email is properly
+    formatted (never attachment-only)."""
+    core = (body or "").strip() or (
+        f"This is an automated notification from the Production & Scheduling Assistant "
+        f"regarding: {subject}."
+    )
+    stamp = datetime.now().strftime("%d-%m-%Y %H:%M")
+    return (
+        "Hello,\n\n"
+        f"{core}\n\n"
+        "Regards,\n"
+        "Production & Scheduling Assistant\n"
+        f"Generated on {stamp}. This is an automated message — please do not reply."
+    )
+
+
 def send_alert_email(subject: str, body: str, to: str | None = None,
                      attachment: str | None = None) -> dict:
     """Send (or simulate) an email, optionally attaching a chart PNG from the exports folder.
     Returns a status dict; never raises on bad input."""
     recipient = (to or settings.alert_email_to).strip()
     subject = (subject or "").strip()[:MAX_SUBJECT]
-    body = (body or "")[:MAX_BODY]
+    body = _format_body(subject, (body or "")[:MAX_BODY])
     attach_path = _safe_attachment(attachment)
 
     if not EMAIL_RE.match(recipient):

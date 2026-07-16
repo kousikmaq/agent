@@ -1,20 +1,20 @@
-// MSAL configuration. Real Entra ID (Azure AD) SSO activates when VITE_AAD_CLIENT_ID is set
-// (register an SPA app with redirect URI = this app's origin). Until then the app runs in a
-// local demo sign-in mode so the UI is fully usable and testable.
-const clientId = import.meta.env.VITE_AAD_CLIENT_ID || "";
-const tenant = import.meta.env.VITE_AAD_TENANT || "organizations";
+// Email-only login. Access is restricted to a single company email domain.
+export const ALLOWED_DOMAIN = "maqsoftware.com";
 
-export const authEnabled = Boolean(clientId);
+export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-export const msalConfig = {
-  auth: {
-    clientId,
-    authority: `https://login.microsoftonline.com/${tenant}`,
-    redirectUri: typeof window !== "undefined" ? window.location.origin : "/",
-    postLogoutRedirectUri: typeof window !== "undefined" ? window.location.origin : "/",
-  },
-  cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: false },
-};
+export function isAllowedEmail(email) {
+  const e = String(email || "").trim().toLowerCase();
+  return EMAIL_RE.test(e) && e.endsWith(`@${ALLOWED_DOMAIN}`);
+}
 
-// Scopes requested at sign-in. User.Read lets us read the signed-in user's profile name.
-export const loginRequest = { scopes: ["User.Read"] };
+// Derive a friendly display name from the email local part.
+// e.g. "kousik.maity@maqsoftware.com" -> "Kousik Maity"
+export function nameFromEmail(email) {
+  const local = String(email || "").split("@")[0] || "user";
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ") || "User";
+}

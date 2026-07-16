@@ -498,6 +498,19 @@ body {
 .login-note { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
 .login-foot { position: absolute; bottom: 18px; z-index: 1; font-size: 11.5px; color: var(--muted); }
 
+.login-form { display: flex; flex-direction: column; gap: 10px; }
+.login-input {
+  width: 100%; padding: 13px 15px; border: 1px solid #d6dbe4; border-radius: 10px;
+  font-size: 15px; outline: none; box-sizing: border-box; text-align: center; transition: border-color .15s ease;
+}
+.login-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+.login-error { font-size: 12.5px; color: var(--rose); }
+.login-submit {
+  width: 100%; border: none; border-radius: 10px; padding: 13px; font-size: 15px; font-weight: 700; color: #fff;
+  cursor: pointer; background: linear-gradient(120deg, var(--blue), #8C6FC0);
+  box-shadow: 0 6px 18px rgba(91,141,214,.35);
+}
+
 /* ============================================================
    Top bar refinements: scenario switcher + user menu
    ============================================================ */

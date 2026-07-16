@@ -159,6 +159,29 @@ function downloadChart(r) {
   a.remove();
 }
 
+function buildInsightsBody(report) {
+  const lines = [];
+  lines.push(`Please find attached this week's production insights report (generated ${report.generated_at}).`);
+  lines.push("");
+  lines.push("KEY NUMBERS");
+  (report.kpis || []).forEach((k) => lines.push(`  • ${k.label}: ${k.value}`));
+  lines.push("");
+  lines.push("KEY TAKEAWAYS");
+  (report.narrative || []).forEach((n) => lines.push(`  • ${n}`));
+  lines.push("");
+  lines.push("The full visual report with charts is attached as a PNG.");
+  return lines.join("\n");
+}
+
+function buildChartBody(r) {
+  const lines = [];
+  lines.push(`Please find attached the "${r.title || "production"}" chart.`);
+  if (r.insight) { lines.push(""); lines.push(`Insight: ${r.insight}`); }
+  lines.push("");
+  lines.push("The chart is attached as a PNG image.");
+  return lines.join("\n");
+}
+
 export default function App() {
   const [view, setView] = useState("dashboard");
   const [scenario, setScenario] = useState("min_risk");
@@ -223,9 +246,11 @@ export default function App() {
     setTimeout(() => { try { window.close(); } catch { /* ignore */ } }, 100);
   }
 
-  function emailInsightsImage(dataUrl) {
+  function emailInsightsImage(dataUrl, report) {
+    const body = report ? buildInsightsBody(report)
+      : "Please find attached this week's production insights report.";
     requestAction({ id: "email_image", label: "Email insights report",
-      params: { subject: "Weekly production insights", image_base64: dataUrl } });
+      params: { subject: "Weekly production insights", body, image_base64: dataUrl } });
   }
 
   // Decide whether an action needs a modal (ask email / confirm order) or runs directly.
@@ -533,7 +558,8 @@ function Assistant({ view, plan, messages, input, loading, endRef, maximized,
           <div className="msg assistant fade-in"><div className="bubble thinking"><span className="spinner" /> Analysing…</div></div>
         )}
         {hasChat && !loading && (
-          <FollowUps view={view} suggestions={suggestions} onAsk={onAsk} />
+          <FollowUps view={view} suggestions={suggestions} onAsk={onAsk}
+            insightsShown={messages.some((m) => m.role === "insights")} />
         )}
         <div ref={endRef} />
       </div>
@@ -548,13 +574,15 @@ function Assistant({ view, plan, messages, input, loading, endRef, maximized,
   );
 }
 
-function FollowUps({ view, suggestions, onAsk }) {
-  const picks = suggestions.slice(0, 4);
+function FollowUps({ view, suggestions, onAsk, insightsShown }) {
+  const picks = suggestions.slice(0, insightsShown ? 5 : 4);
   return (
     <motion.div className="followups" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
       <div className="followups-title">Continue exploring</div>
       <div className="followups-row">
-        <button className="fu-chip insights" onClick={() => onAsk(INSIGHTS_QUERY)}>✨ Insights report</button>
+        {!insightsShown && (
+          <button className="fu-chip insights" onClick={() => onAsk(INSIGHTS_QUERY)}>✨ Insights report</button>
+        )}
         {picks.map((q) => (
           <motion.button key={q} className="fu-chip" onClick={() => onAsk(q)} whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }}>
             {q}
@@ -619,7 +647,7 @@ function ChartResult({ r, onAction }) {
         <button className="chip" onClick={() => downloadChart(r)}>⬇ Download</button>
         <button className="chip" onClick={() => onAction({
           id: "email_chart", label: "Email this chart",
-          params: { filename: r.filename, subject: r.title || "Production insight chart" },
+          params: { filename: r.filename, subject: r.title || "Production insight chart", body: buildChartBody(r) },
         })}>✉️ Email chart</button>
       </div>
     </div>

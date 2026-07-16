@@ -80,7 +80,7 @@ export default function InsightsReport({ report, onEmailImage }) {
     setBusy("email");
     try {
       const url = await capture();
-      if (url) onEmailImage?.(url);
+      if (url) onEmailImage?.(url, report);
     } finally { setBusy(""); }
   }
 

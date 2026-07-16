@@ -1,13 +1,23 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { ALLOWED_DOMAIN, isAllowedEmail } from "./authConfig";
 
-// Full-screen sign-in gate. `onLogin` triggers the Microsoft account picker (or demo sign-in).
-export default function Login({ onLogin, demo }) {
-  const [busy, setBusy] = useState(false);
-  async function go() {
-    setBusy(true);
-    try { await onLogin(); } finally { setBusy(false); }
+// Email-only sign-in. Only addresses on the company domain are allowed.
+export default function Login({ onLogin, lastEmail = "" }) {
+  const [email, setEmail] = useState(lastEmail);
+  const [error, setError] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    const value = email.trim().toLowerCase();
+    if (!isAllowedEmail(value)) {
+      setError(`Please use your @${ALLOWED_DOMAIN} email address.`);
+      return;
+    }
+    setError("");
+    onLogin(value);
   }
+
   return (
     <div className="login-screen">
       <div className="login-bg">
@@ -18,27 +28,26 @@ export default function Login({ onLogin, demo }) {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
         <div className="login-logo">⬢</div>
-        <h1 className="login-title">Production Planning</h1>
-        <p className="login-sub">Schedule Optimization &amp; Intelligence Agent</p>
-        <motion.button className="ms-btn" onClick={go} disabled={busy}
-          whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}>
-          {busy ? (
-            <span className="ms-spin" />
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 21 21" aria-hidden="true">
-              <rect x="1" y="1" width="9" height="9" fill="#F25022" />
-              <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
-              <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
-              <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
-            </svg>
-          )}
-          <span>{busy ? "Signing in…" : "Sign in with Microsoft"}</span>
-        </motion.button>
-        <p className="login-note">
-          {demo
-            ? "Demo mode — single sign-on activates once an Entra ID app is configured."
-            : "Use your organisation account to continue."}
-        </p>
+        <h1 className="login-title">Production &amp; Scheduling Assistant</h1>
+        <p className="login-sub">Sign in with your work email to continue</p>
+
+        <form onSubmit={submit} className="login-form">
+          <input
+            className="login-input"
+            type="email"
+            autoFocus
+            placeholder={`you@${ALLOWED_DOMAIN}`}
+            value={email}
+            onChange={(e) => { setEmail(e.target.value); setError(""); }}
+          />
+          {error && <div className="login-error">{error}</div>}
+          <motion.button type="submit" className="login-submit"
+            whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }}>
+            Continue →
+          </motion.button>
+        </form>
+
+        <p className="login-note">Access is restricted to <b>@{ALLOWED_DOMAIN}</b> accounts.</p>
       </motion.div>
       <div className="login-foot">Microsoft Agent Framework · Azure OpenAI</div>
     </div>

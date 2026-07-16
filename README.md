@@ -93,22 +93,16 @@ cd backend
 python -m pytest -q
 ```
 
-## Authentication (Microsoft sign-in)
-The frontend gates the app behind Microsoft sign-in.
+## Authentication (email sign-in)
+The frontend gates the app behind a simple **email sign-in**, restricted to one company domain.
 
-- **Out of the box (fresh clone):** runs in a local **demo sign-in** — no configuration needed,
-  nothing to fail. Click *Sign in with Microsoft* and you're in.
-- **Real single sign-on (production):** register **one** Single-Page App in **your** Entra ID
-  tenant and set it as **multi-tenant** (accounts in any organizational directory). Then set
-  `frontend/.env`:
-  ```
-  VITE_AAD_CLIENT_ID=<your-app-client-id>
-  VITE_AAD_TENANT=organizations        # or "common", or a specific tenant id
-  ```
-  You only configure **your** client ID once. **Every user signs in with their own Microsoft
-  account** — they do **not** need their own client ID. The client ID identifies the *app*, not
-  the user. Add each deployment origin (e.g. `http://localhost:5173`, your prod URL) as a
-  redirect URI on the app registration.
+- On the login screen the user enters their work email (e.g. `you@maqsoftware.com`).
+- Only addresses ending in **`@maqsoftware.com`** are allowed; anything else is rejected.
+- The session is cached in `localStorage`, so **returning users are signed in automatically**
+  and never have to re-enter their email (until they sign out).
+- To change the allowed domain, edit `ALLOWED_DOMAIN` in `frontend/src/auth/authConfig.js`.
+
+No external identity provider or app registration is required — nothing to configure on clone.
 
 ## Configuration
 Copy `.env.example` to `.env` (in this folder) and fill in Azure OpenAI + SMTP if desired.
