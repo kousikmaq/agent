@@ -93,6 +93,23 @@ cd backend
 python -m pytest -q
 ```
 
+## Authentication (Microsoft sign-in)
+The frontend gates the app behind Microsoft sign-in.
+
+- **Out of the box (fresh clone):** runs in a local **demo sign-in** — no configuration needed,
+  nothing to fail. Click *Sign in with Microsoft* and you're in.
+- **Real single sign-on (production):** register **one** Single-Page App in **your** Entra ID
+  tenant and set it as **multi-tenant** (accounts in any organizational directory). Then set
+  `frontend/.env`:
+  ```
+  VITE_AAD_CLIENT_ID=<your-app-client-id>
+  VITE_AAD_TENANT=organizations        # or "common", or a specific tenant id
+  ```
+  You only configure **your** client ID once. **Every user signs in with their own Microsoft
+  account** — they do **not** need their own client ID. The client ID identifies the *app*, not
+  the user. Add each deployment origin (e.g. `http://localhost:5173`, your prod URL) as a
+  redirect URI on the app registration.
+
 ## Configuration
 Copy `.env.example` to `.env` (in this folder) and fill in Azure OpenAI + SMTP if desired.
 Without an Azure key the system still works (deterministic router). Without SMTP the email
@@ -102,7 +119,7 @@ environment and never committed or logged.
 ## Actions (human-in-the-loop)
 The agent proposes actions; you confirm them in the UI. Each maps to
 `POST /api/actions/execute` with an allow-listed `id`:
-`send_email`, `place_reorder`, `generate_chart`, `export_plan`.
+`send_email`, `place_reorder`, `generate_chart`, `export_plan`, `email_chart`, `email_image`.
 
 ## Data model
 See [backend/data/schema.md](backend/data/schema.md). One coherent star schema

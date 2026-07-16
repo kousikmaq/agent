@@ -169,6 +169,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(true);
   const [maximized, setMaximized] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [exitConfirm, setExitConfirm] = useState(false);
+  const [exited, setExited] = useState(false);
   const [modal, setModal] = useState(null); // { kind:'email'|'reorder', action, email }
   const endRef = useRef(null);
   const { user, logout } = useAuth();
@@ -213,6 +216,13 @@ export default function App() {
   function clearChat() { setMessages([]); }
   function newChat() { setMessages([]); setMaximized(false); }
 
+  function confirmExit() {
+    setExitConfirm(false);
+    setExited(true);
+    // Try to close the tab (works for script-opened windows); the exit screen is the fallback.
+    setTimeout(() => { try { window.close(); } catch { /* ignore */ } }, 100);
+  }
+
   function emailInsightsImage(dataUrl) {
     requestAction({ id: "email_image", label: "Email insights report",
       params: { subject: "Weekly production insights", image_base64: dataUrl } });
@@ -248,11 +258,12 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {exited && <ExitScreen onReopen={() => setExited(false)} />}
       <TopBar plan={plan} scenario={scenario} onScenario={setScenario}
         onRefresh={regen} refreshing={planLoading} user={user} onLogout={logout}
-        onExport={() => requestAction({ id: "export_plan", label: "Export weekly plan (CSV)", params: { scenario } })} />
-      <div className={`shell-body ${assistantOpen && !maximized ? "" : "no-assistant"}`}>
-        <LeftNav view={view} onNav={setView} />
+        onToggleNav={() => setNavCollapsed((c) => !c)} />
+      <div className={`shell-body ${assistantOpen && !maximized ? "" : "no-assistant"} ${navCollapsed ? "nav-collapsed" : ""}`}>
+        <LeftNav view={view} onNav={setView} collapsed={navCollapsed} onExit={() => setExitConfirm(true)} />
         <main className="main-col">
           <AnimatePresence mode="wait">
             <motion.div
@@ -309,6 +320,32 @@ export default function App() {
           onConfirm={(extra) => runAction(modal.action, extra)}
         />
       )}
+
+      {exitConfirm && (
+        <div className="modal-overlay fade-in" onClick={() => setExitConfirm(false)}>
+          <div className="modal pop-in" onClick={(e) => e.stopPropagation()}>
+            <h3>🚪 Exit application?</h3>
+            <p className="modal-sub">You will be signed out of this session and the app will close.</p>
+            <div className="modal-btns">
+              <button className="ghost" onClick={() => setExitConfirm(false)}>Cancel</button>
+              <button onClick={confirmExit}>Exit</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExitScreen({ onReopen }) {
+  return (
+    <div className="exit-screen">
+      <motion.div className="exit-card" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
+        <div className="exit-logo">⬢</div>
+        <h1>You've exited</h1>
+        <p>The Production &amp; Scheduling Assistant is closed. You can safely close this tab.</p>
+        <button className="ms-btn" onClick={onReopen}>Re-open the app</button>
+      </motion.div>
     </div>
   );
 }
@@ -323,14 +360,19 @@ const NAV = [
   { key: "workforce", icon: "☺", label: "Workforce" },
 ];
 
-function LeftNav({ view, onNav }) {
+function LeftNav({ view, onNav, collapsed, onExit }) {
   return (
-    <nav className="leftnav">
+    <nav className={`leftnav ${collapsed ? "collapsed" : ""}`}>
       {NAV.map((n) => (
-        <button key={n.key} className={`nav-item ${view === n.key ? "active" : ""}`} onClick={() => onNav(n.key)}>
+        <button key={n.key} className={`nav-item ${view === n.key ? "active" : ""}`} onClick={() => onNav(n.key)}
+          title={collapsed ? n.label : undefined}>
           <span className="nav-icon">{n.icon}</span><span className="nav-label">{n.label}</span>
         </button>
       ))}
+      <div className="nav-spacer" />
+      <button className="nav-item nav-exit" onClick={onExit} title="Exit application">
+        <span className="nav-icon">⏻</span><span className="nav-label">Exit</span>
+      </button>
     </nav>
   );
 }
@@ -376,21 +418,16 @@ function UserMenu({ user, onLogout }) {
   );
 }
 
-function TopBar({ plan, scenario, onScenario, onRefresh, refreshing, onExport, user, onLogout }) {
+function TopBar({ scenario, onScenario, onRefresh, refreshing, user, onLogout, onToggleNav }) {
   return (
     <header className="topbar2">
-      <div className="tb-brand">
+      <div className="tb-left">
+        <button className="nav-toggle" onClick={onToggleNav} title="Toggle sidebar">☰</button>
         <span className="tb-logo">⬢</span>
-        <div>
-          <div className="tb-title">Production Planning</div>
-          <div className="tb-sub">
-            {plan?.planning_week ? `Week ${plan.planning_week.start} – ${plan.planning_week.end}` : "Schedule Optimization Agent"}
-          </div>
-        </div>
+        <div className="tb-title">Production &amp; Scheduling Assistant</div>
       </div>
 
-      <div className="tb-scenario">
-        <span className="tb-scn-label">Scenario</span>
+      <div className="tb-center">
         <div className="scn-seg">
           {SCENARIOS.map((s) => (
             <button key={s.key} className={`scn-btn ${scenario === s.key ? "active" : ""}`}
@@ -400,8 +437,9 @@ function TopBar({ plan, scenario, onScenario, onRefresh, refreshing, onExport, u
       </div>
 
       <div className="tb-right">
-        <button className="tb-btn" onClick={onExport}>⬇ Export</button>
-        <button className="tb-btn" onClick={onRefresh} disabled={refreshing}>{refreshing ? "…" : "⟳ Refresh"}</button>
+        <button className="tb-btn" onClick={onRefresh} disabled={refreshing} title="Regenerate the weekly plan">
+          {refreshing ? "…" : "⟳ Refresh"}
+        </button>
         <UserMenu user={user} onLogout={onLogout} />
       </div>
     </header>
@@ -437,12 +475,8 @@ function Skeleton() {
 
 function Assistant({ view, plan, messages, input, loading, endRef, maximized,
   onInput, onAsk, onAction, onInsightsEmail, onClose, onToggleMax, onNewChat, onClearChat }) {
-  const [showSug, setShowSug] = useState(true);
   const suggestions = SUGGESTIONS[view] || SUGGESTIONS.dashboard;
   const hasChat = messages.length > 0;
-
-  // Give answers room to breathe: collapse the suggestion list once a conversation starts.
-  useEffect(() => { if (messages.length > 0) setShowSug(false); }, [messages.length]);
 
   return (
     <motion.aside className={`assistant-dock ${maximized ? "maximized" : ""}`} key="dock"
@@ -450,9 +484,9 @@ function Assistant({ view, plan, messages, input, loading, endRef, maximized,
       animate={{ x: 0, opacity: 1, scale: 1 }} exit={{ x: maximized ? 0 : 40, opacity: 0 }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}>
       <div className="ad-head">
-        <div className="ad-title"><CopilotMark size={18} /> Production &amp; Scheduling Assistant</div>
+        <div className="ad-title"><CopilotMark size={18} /> Copilot</div>
         <div className="ad-head-btns">
-          <button className="ad-icon-btn" onClick={onNewChat} title="New chat">✎</button>
+          <button className="ad-icon-btn" onClick={onNewChat} title="New chat">＋</button>
           <button className="ad-icon-btn" onClick={onClearChat} title="Clear chat" disabled={!hasChat}>🗑</button>
           <button className="ad-icon-btn" onClick={onToggleMax} title={maximized ? "Restore" : "Maximize"}>
             {maximized ? "🗗" : "🗖"}
@@ -469,29 +503,23 @@ function Assistant({ view, plan, messages, input, loading, endRef, maximized,
         </div>
       )}
 
-      <div className="ad-sug">
-        <button className="ins-cta" onClick={() => onAsk(INSIGHTS_QUERY)} disabled={loading}>
-          <span className="ins-cta-spark">✨</span>
-          <span><b>Generate insights report</b><small>charts + narrative you can download or email</small></span>
-        </button>
-        <button className="ad-sug-head" onClick={() => setShowSug((s) => !s)}>
-          <span>Suggested for {VIEW_TITLES[view] || "Dashboard"}</span>
-          <span className="ad-sug-caret">{showSug ? "▾" : "▸"}</span>
-        </button>
-        <AnimatePresence initial={false}>
-          {showSug && (
-            <motion.div className="ad-sug-list"
-              initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.22 }}>
-              {suggestions.map((e, i) => (
-                <motion.button key={e} className="sug-chip" onClick={() => onAsk(e)} disabled={loading}
-                  initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
-                  whileHover={{ x: 3 }} whileTap={{ scale: 0.97 }}>{e}</motion.button>
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+      {/* Sticky welcome + suggestions only before a conversation starts (frees space for content). */}
+      {!hasChat && (
+        <div className="ad-sug">
+          <button className="ins-cta" onClick={() => onAsk(INSIGHTS_QUERY)} disabled={loading}>
+            <span className="ins-cta-spark">✨</span>
+            <span><b>Generate insights report</b><small>charts + narrative you can download or email</small></span>
+          </button>
+          <div className="ad-sug-title">Suggested for {VIEW_TITLES[view] || "Dashboard"}</div>
+          <div className="ad-sug-list">
+            {suggestions.map((e, i) => (
+              <motion.button key={e} className="sug-chip" onClick={() => onAsk(e)} disabled={loading}
+                initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
+                whileHover={{ x: 3 }} whileTap={{ scale: 0.97 }}>{e}</motion.button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="ad-messages">
         {messages.length === 0 && (
@@ -504,6 +532,9 @@ function Assistant({ view, plan, messages, input, loading, endRef, maximized,
         {loading && (
           <div className="msg assistant fade-in"><div className="bubble thinking"><span className="spinner" /> Analysing…</div></div>
         )}
+        {hasChat && !loading && (
+          <FollowUps view={view} suggestions={suggestions} onAsk={onAsk} />
+        )}
         <div ref={endRef} />
       </div>
       <div className="composer">
@@ -514,6 +545,23 @@ function Assistant({ view, plan, messages, input, loading, endRef, maximized,
         <button onClick={() => onAsk()} disabled={loading || !input.trim()}>Send</button>
       </div>
     </motion.aside>
+  );
+}
+
+function FollowUps({ view, suggestions, onAsk }) {
+  const picks = suggestions.slice(0, 4);
+  return (
+    <motion.div className="followups" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+      <div className="followups-title">Continue exploring</div>
+      <div className="followups-row">
+        <button className="fu-chip insights" onClick={() => onAsk(INSIGHTS_QUERY)}>✨ Insights report</button>
+        {picks.map((q) => (
+          <motion.button key={q} className="fu-chip" onClick={() => onAsk(q)} whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }}>
+            {q}
+          </motion.button>
+        ))}
+      </div>
+    </motion.div>
   );
 }
 
@@ -602,6 +650,26 @@ function OrderResult({ r }) {
   );
 }
 
+function EmailResult({ r }) {
+  const simulated = r.status === "simulated";
+  return (
+    <div className="email-success pop-in">
+      <div className="email-check">
+        <span className="check-badge">✓</span>
+        <div>
+          <div className="email-line1">{simulated ? "Email queued" : "Email sent"}</div>
+          <div className="email-line2">{simulated ? "SMTP not configured — saved to outbox" : "Delivered successfully"}</div>
+        </div>
+      </div>
+      <ul className="email-detail">
+        <li><span>To</span><b>{r.to}</b></li>
+        {r.subject && <li><span>Subject</span><b>{r.subject}</b></li>}
+        {r.attachment && <li><span>Attachment</span><b>📎 {r.attachment}</b></li>}
+      </ul>
+    </div>
+  );
+}
+
 function Message({ m, onAction, onInsightsEmail }) {
   if (m.role === "user") return <div className="msg user fade-in"><div className="bubble">{m.text}</div></div>;
   if (m.role === "system") return <div className="msg system fade-in">{m.text}</div>;
@@ -622,6 +690,10 @@ function Message({ m, onAction, onInsightsEmail }) {
     const r = m.result || {};
     const isChart = m.actionId === "generate_chart" && r.image_base64;
     const isOrder = m.actionId === "place_reorder" && r.po_id;
+    const isEmail = (m.actionId === "send_email" || m.actionId === "email_chart" || m.actionId === "email_image");
+    if (isEmail && r.status !== "error") {
+      return <div className="msg assistant fade-in"><EmailResult r={r} /></div>;
+    }
     return (
       <div className="msg assistant fade-in">
         <div className="bubble action-result">
@@ -634,9 +706,6 @@ function Message({ m, onAction, onInsightsEmail }) {
           {isChart && <ChartResult r={r} onAction={onAction} />}
           {isOrder && <OrderResult r={r} />}
           {!isChart && !isOrder && r.filename && <div className="mini">Saved: {r.filename}{r.rows != null ? ` (${r.rows} rows)` : ""}</div>}
-          {!isChart && !isOrder && r.subject && (
-            <div className="mini">✉️ “{r.subject}” → {r.to}{r.attachment ? ` (with ${r.attachment})` : ""}</div>
-          )}
         </div>
       </div>
     );

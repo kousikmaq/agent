@@ -74,6 +74,7 @@ export function getAllocation() {
 }
 
 export function getInsights() {
-  return fetch("/api/insights").then(json);
+  // Always regenerate — never serve a cached/stale report.
+  return fetch(`/api/insights?t=${Date.now()}`, { cache: "no-store" }).then(json);
 }
 
