@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getStatus, sendChat, executeAction, getPlan, regeneratePlan } from "./api";
+import {
+  Dashboard, PlanView, ScheduleGantt, MachinesView, OrdersView, DemandView, WorkforceView,
+} from "./views";
 
 const EXAMPLES = [
   "Which orders are at risk of delay, and by how many days?",
@@ -20,19 +23,90 @@ const AGENT_COLORS = {
   Orchestrator: "#8C6FC0",
 };
 
+const EMAIL_ACTIONS = new Set(["send_email", "email_chart"]);
+
 function AgentBadge({ agent }) {
   const color = AGENT_COLORS[agent] || "#5A6675";
   return <span className="badge" style={{ background: color }}>{agent}</span>;
 }
 
+/* ---------- safe, tiny Markdown renderer (no dangerouslySetInnerHTML) ---------- */
+function renderInline(text) {
+  const parts = String(text).split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, i) =>
+    p.startsWith("**") && p.endsWith("**")
+      ? <strong key={i}>{p.slice(2, -2)}</strong>
+      : <span key={i}>{p}</span>
+  );
+}
+
+function Markdown({ text }) {
+  if (!text) return null;
+  const lines = String(text).split(/\r?\n/);
+  const blocks = [];
+  let list = null;
+  const flush = () => { if (list) { blocks.push(list); list = null; } };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const heading = line.match(/^\s*(#{1,4})\s+(.*)/);
+    const bullet = line.match(/^\s*[-*]\s+(.*)/);
+    const num = line.match(/^\s*\d+\.\s+(.*)/);
+    if (heading) {
+      flush();
+      blocks.push({ type: "h", text: heading[2] });
+    } else if (bullet) {
+      if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] }; }
+      list.items.push(bullet[1]);
+    } else if (num) {
+      if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] }; }
+      list.items.push(num[1]);
+    } else if (line.trim() === "") {
+      flush();
+    } else {
+      flush();
+      blocks.push({ type: "p", text: line });
+    }
+  }
+  flush();
+  return (
+    <div className="md">
+      {blocks.map((b, i) => {
+        if (b.type === "p") return <p key={i}>{renderInline(b.text)}</p>;
+        if (b.type === "h") return <p key={i} className="md-h">{renderInline(b.text)}</p>;
+        const Tag = b.type;
+        return <Tag key={i}>{b.items.map((it, j) => <li key={j}>{renderInline(it)}</li>)}</Tag>;
+      })}
+    </div>
+  );
+}
+
+function downloadChart(r) {
+  const a = document.createElement("a");
+  a.href = `data:image/png;base64,${r.image_base64}`;
+  a.download = r.filename || "chart.png";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export default function App() {
   const [status, setStatus] = useState(null);
+  const [view, setView] = useState("dashboard");
+  const [scenario, setScenario] = useState("min_risk");
+  const [plan, setPlan] = useState(null);
+  const [planLoading, setPlanLoading] = useState(true);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(true);
+  const [modal, setModal] = useState(null); // { kind:'email'|'reorder', action, email }
   const endRef = useRef(null);
 
   useEffect(() => { getStatus().then(setStatus).catch(() => {}); }, []);
+  useEffect(() => {
+    setPlanLoading(true);
+    getPlan(scenario).then(setPlan).catch(() => setPlan(null)).finally(() => setPlanLoading(false));
+  }, [scenario]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
   async function ask(q) {
@@ -51,201 +125,309 @@ export default function App() {
     }
   }
 
-  async function runAction(action) {
+  function askFromTile(q) { setAssistantOpen(true); ask(q); }
+
+  // Decide whether an action needs a modal (ask email / confirm order) or runs directly.
+  function requestAction(action) {
+    if (EMAIL_ACTIONS.has(action.id)) setModal({ kind: "email", action, email: "" });
+    else if (action.id === "place_reorder") setModal({ kind: "reorder", action });
+    else runAction(action);
+  }
+
+  async function runAction(action, extra = {}) {
+    setModal(null);
+    setAssistantOpen(true);
     const label = action.label || action.id;
-    if (!window.confirm(`Run this action?\n\n${label}`)) return;
-    setMessages((m) => [...m, { role: "system", text: `Running: ${label}...` }]);
+    const params = { ...(action.params || {}), ...extra };
+    setMessages((m) => [...m, { role: "running", label }]);
     try {
-      const res = await executeAction(action.id, action.params || {});
-      setMessages((m) => [...m, { role: "action", label, result: res }]);
+      const res = await executeAction(action.id, params);
+      setMessages((m) => [...m.filter((x) => x.role !== "running"),
+        { role: "action", actionId: action.id, label, result: res }]);
       getStatus().then(setStatus).catch(() => {});
     } catch {
-      setMessages((m) => [...m, { role: "system", text: `Action failed: ${label}` }]);
+      setMessages((m) => [...m.filter((x) => x.role !== "running"),
+        { role: "system", text: `Action failed: ${label}` }]);
     }
   }
 
+  async function regen() {
+    setPlanLoading(true);
+    try { setPlan(await regeneratePlan(scenario)); } catch { /* keep old */ } finally { setPlanLoading(false); }
+  }
+
   return (
-    <div className="app">
-      <header className="topbar">
+    <div className="app-shell">
+      <TopBar status={status} plan={plan} scenario={scenario} onScenario={setScenario}
+        onRefresh={regen} refreshing={planLoading}
+        onExport={() => requestAction({ id: "export_plan", label: "Export weekly plan (CSV)", params: { scenario } })} />
+      <div className="shell-body">
+        <LeftNav view={view} onNav={setView} assistantOpen={assistantOpen}
+          onToggleAssistant={() => setAssistantOpen((o) => !o)} />
+        <main className="main-col">
+          {planLoading && (view === "dashboard" || view === "plan")
+            ? <Skeleton />
+            : <MainView view={view} plan={plan} scenario={scenario}
+                onNav={setView} onAsk={askFromTile} onAction={requestAction} />}
+        </main>
+        {assistantOpen && (
+          <Assistant messages={messages} input={input} loading={loading} endRef={endRef}
+            onInput={setInput} onAsk={ask} onAction={requestAction}
+            onClose={() => setAssistantOpen(false)} />
+        )}
+      </div>
+
+      {modal && (
+        <ActionModal
+          modal={modal}
+          onCancel={() => setModal(null)}
+          onEmailChange={(email) => setModal((s) => ({ ...s, email }))}
+          onConfirm={(extra) => runAction(modal.action, extra)}
+        />
+      )}
+    </div>
+  );
+}
+
+const NAV = [
+  { key: "dashboard", icon: "▣", label: "Dashboard" },
+  { key: "plan", icon: "▤", label: "Plan" },
+  { key: "schedule", icon: "▦", label: "Schedule" },
+  { key: "machines", icon: "⚙", label: "Machines" },
+  { key: "orders", icon: "▧", label: "Orders" },
+  { key: "demand", icon: "◔", label: "Demand" },
+  { key: "workforce", icon: "☺", label: "Workforce" },
+];
+
+function LeftNav({ view, onNav, assistantOpen, onToggleAssistant }) {
+  return (
+    <nav className="leftnav">
+      {NAV.map((n) => (
+        <button key={n.key} className={`nav-item ${view === n.key ? "active" : ""}`} onClick={() => onNav(n.key)}>
+          <span className="nav-icon">{n.icon}</span><span className="nav-label">{n.label}</span>
+        </button>
+      ))}
+      <div className="nav-spacer" />
+      <button className={`nav-item ${assistantOpen ? "active" : ""}`} onClick={onToggleAssistant}>
+        <span className="nav-icon">✉</span><span className="nav-label">Assistant</span>
+      </button>
+    </nav>
+  );
+}
+
+const SCENARIOS = [
+  { key: "min_risk", label: "Min risk" },
+  { key: "max_throughput", label: "Throughput" },
+  { key: "min_cost", label: "Min cost" },
+];
+
+function TopBar({ status, plan, scenario, onScenario, onRefresh, refreshing, onExport }) {
+  const dot = (ok) => (ok ? "dot ok" : "dot off");
+  return (
+    <header className="topbar2">
+      <div className="tb-brand">
+        <span className="tb-logo">⬢</span>
         <div>
-          <h1>Production Planning &amp; Schedule Optimization Agent</h1>
-          <p className="subtitle">Multi-agent · Microsoft Agent Framework · open source + Azure OpenAI</p>
+          <div className="tb-title">Plant Control Tower</div>
+          <div className="tb-sub">
+            {plan?.planning_week ? `Week ${plan.planning_week.start} – ${plan.planning_week.end}` : "Production Planning Agent"}
+          </div>
         </div>
+      </div>
+
+      <div className="tb-scenario">
+        {SCENARIOS.map((s) => (
+          <button key={s.key} className={`scn-btn ${scenario === s.key ? "active" : ""}`}
+            onClick={() => onScenario(s.key)}>{s.label}</button>
+        ))}
+      </div>
+
+      <div className="tb-right">
         {status && (
-          <div className="status-pills">
-            <span className={`pill ${status.models_trained ? "ok" : "warn"}`}>
-              Models {status.models_trained ? "ready" : "not trained"}
-            </span>
-            <span className={`pill ${status.llm_configured ? "ok" : "muted"}`}>
-              LLM {status.llm_configured ? "on" : "off (router mode)"}
-            </span>
-            <span className="pill muted">Cache {status.cache?.entries ?? 0}</span>
+          <div className="tb-dots">
+            <span className={dot(status.models_trained)} title="Models">● Models</span>
+            <span className={dot(status.llm_configured)} title="LLM">● LLM</span>
+            <span className="dot ok" title="Cache">● Cache {status.cache?.entries ?? 0}</span>
           </div>
         )}
-      </header>
+        <button className="tb-btn" onClick={onExport}>⬇ Export</button>
+        <button className="tb-btn" onClick={onRefresh} disabled={refreshing}>{refreshing ? "…" : "⟳ Refresh"}</button>
+      </div>
+    </header>
+  );
+}
 
-      <WeeklyPlan onAction={runAction} />
+function MainView({ view, plan, scenario, onNav, onAsk, onAction }) {
+  switch (view) {
+    case "plan": return <PlanView plan={plan} scenario={scenario} />;
+    case "schedule": return <ScheduleGantt scenario={scenario} />;
+    case "machines": return <MachinesView onAsk={onAsk} />;
+    case "orders": return <OrdersView />;
+    case "demand": return <DemandView onAction={onAction} />;
+    case "workforce": return <WorkforceView />;
+    default: return <Dashboard plan={plan} onNav={onNav} onAsk={onAsk} onAction={onAction} />;
+  }
+}
 
-      <div className="layout">
-        <main className="chat">
-          <div className="messages">
-            {messages.length === 0 && (
-              <div className="empty">
-                <h3>Ask about capacity, bottlenecks, delay risk, downtime, demand, scheduling or re-orders.</h3>
-              </div>
-            )}
-            {messages.map((m, i) => (
-              <Message key={i} m={m} onAction={runAction} />
-            ))}
-            {loading && <div className="msg assistant"><div className="bubble">Analysing…</div></div>}
-            <div ref={endRef} />
-          </div>
+function Skeleton() {
+  return (
+    <div className="view">
+      <div className="skel skel-hero" />
+      <div className="skel-row">
+        {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skel skel-kpi" />)}
+      </div>
+      <div className="skel-row">
+        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="skel skel-tile" />)}
+      </div>
+      <div className="skel-note"><span className="spinner" /> Building this week's plan (OR-Tools is solving)…</div>
+    </div>
+  );
+}
 
-          <div className="composer">
-            <input
-              value={input}
-              placeholder="Ask the production planner…"
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && ask()}
-            />
-            <button onClick={() => ask()} disabled={loading}>Send</button>
-          </div>
-        </main>
-
-        <aside className="sidebar">
-          <h4>Try asking</h4>
-          <div className="examples">
-            {EXAMPLES.map((e) => (
-              <button key={e} className="example" onClick={() => ask(e)}>{e}</button>
-            ))}
-          </div>
-          {status?.model_metrics?.delay_risk && (
-            <div className="metrics">
-              <h4>Model quality</h4>
-              <MetricRow label="Delay risk (F1)" value={status.model_metrics.delay_risk.macro_f1} />
-              <MetricRow label="Downtime (F1)" value={status.model_metrics.downtime.f1} />
-              <MetricRow label="Demand (MAPE %)" value={status.model_metrics.demand.mape_pct} />
+function Assistant({ messages, input, loading, endRef, onInput, onAsk, onAction, onClose }) {
+  return (
+    <aside className="assistant-dock">
+      <div className="ad-head">
+        <div className="ad-title">🤖 AI Copilot</div>
+        <button className="ad-close" onClick={onClose} title="Collapse">✕</button>
+      </div>
+      <div className="ad-messages">
+        {messages.length === 0 && (
+          <div className="ad-empty">
+            <p>Ask me about capacity, delay risk, downtime, demand, scheduling or re-orders — or tap a question.</p>
+            <div className="ad-examples">
+              {EXAMPLES.map((e) => (
+                <button key={e} className="example" onClick={() => onAsk(e)}>{e}</button>
+              ))}
             </div>
-          )}
-        </aside>
+          </div>
+        )}
+        {messages.map((m, i) => <Message key={i} m={m} onAction={onAction} />)}
+        {loading && (
+          <div className="msg assistant fade-in"><div className="bubble thinking"><span className="spinner" /> Analysing…</div></div>
+        )}
+        <div ref={endRef} />
+      </div>
+      <div className="composer">
+        <input value={input} placeholder="Ask the copilot…"
+          onChange={(e) => onInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onAsk()} />
+        <button onClick={() => onAsk()} disabled={loading}>Send</button>
+      </div>
+    </aside>
+  );
+}
+
+
+function ActionModal({ modal, onCancel, onEmailChange, onConfirm }) {
+  const isEmail = modal.kind === "email";
+  const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(modal.email || "");
+  const p = modal.action.params || {};
+  return (
+    <div className="modal-overlay fade-in" onClick={onCancel}>
+      <div className="modal pop-in" onClick={(e) => e.stopPropagation()}>
+        {isEmail ? (
+          <>
+            <h3>✉️ Send email</h3>
+            <p className="modal-sub">Enter the recipient's email address and the agent will send it.</p>
+            <input
+              className="modal-input"
+              type="email"
+              autoFocus
+              placeholder="name@company.com"
+              value={modal.email}
+              onChange={(e) => onEmailChange(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && emailOk && onConfirm({ to: modal.email })}
+            />
+            <div className="modal-btns">
+              <button className="ghost" onClick={onCancel}>Cancel</button>
+              <button disabled={!emailOk} onClick={() => onConfirm({ to: modal.email })}>Send email</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3>🧾 Place purchase order</h3>
+            <p className="modal-sub">
+              Re-order <b>{p.material_id}</b> × <b>{p.quantity}</b>. A confirmation email will be
+              sent to the default recipient automatically.
+            </p>
+            <div className="modal-btns">
+              <button className="ghost" onClick={onCancel}>Cancel</button>
+              <button onClick={() => onConfirm({})}>Place order</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-function MetricRow({ label, value }) {
+function ChartResult({ r, onAction }) {
   return (
-    <div className="metric-row"><span>{label}</span><b>{value}</b></div>
-  );
-}
-
-function WeeklyPlan({ onAction }) {
-  const [plan, setPlan] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(true);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => { load(); }, []);
-  async function load() {
-    setLoading(true);
-    try { setPlan(await getPlan()); } catch { setPlan(null); } finally { setLoading(false); }
-  }
-  async function regen() {
-    setBusy(true);
-    try { setPlan(await regeneratePlan()); } catch {} finally { setBusy(false); }
-  }
-
-  if (loading) return <section className="plan"><div className="plan-head"><span className="plan-title">📋 This Week's Plan</span><span className="plan-week">building the plan…</span></div></section>;
-  if (!plan || plan.error) return null;
-  const k = plan.kpis || {};
-
-  return (
-    <section className="plan">
-      <div className="plan-head">
-        <div className="plan-heading">
-          <span className="plan-title">📋 This Week's Plan</span>
-          <span className="plan-week">{plan.planning_week?.start} → {plan.planning_week?.end}</span>
-          <span className="plan-scenario">{plan.scenario}</span>
-        </div>
-        <div className="plan-actions">
-          <button className="ghost" onClick={regen} disabled={busy}>{busy ? "…" : "↻ Regenerate"}</button>
-          <button className="ghost" onClick={() => onAction({ id: "export_plan", label: "Export weekly plan (CSV)", params: { scenario: plan.scenario } })}>⬇ Export</button>
-          <button className="ghost" onClick={() => setOpen(!open)}>{open ? "Hide" : "Show"}</button>
-        </div>
+    <div className="chart-result">
+      {r.title && <div className="chart-title">{r.title}</div>}
+      <img className="chart" alt={r.title || "chart"} src={`data:image/png;base64,${r.image_base64}`} />
+      {r.insight && <div className="chart-insight">💡 {r.insight}</div>}
+      <div className="chart-actions">
+        <button className="chip" onClick={() => downloadChart(r)}>⬇ Download</button>
+        <button className="chip" onClick={() => onAction({
+          id: "email_chart", label: "Email this chart",
+          params: { filename: r.filename, subject: r.title || "Production insight chart" },
+        })}>✉️ Email chart</button>
       </div>
-      <div className="plan-headline">{plan.headline}</div>
-      {open && (
-        <>
-          <div className="kpis">
-            <Kpi label="Orders" value={k.orders_planned} />
-            <Kpi label="On-time" value={k.orders_on_time} />
-            <Kpi label="Capacity" value={k.capacity_utilization_pct != null ? `${k.capacity_utilization_pct}%` : "—"} />
-            <Kpi label="Makespan" value={k.makespan_hours != null ? `${k.makespan_hours}h` : "—"} />
-            <Kpi label="Tardiness" value={k.total_tardiness_hours != null ? `${k.total_tardiness_hours}h` : "—"} />
-            <Kpi label="Energy" value={k.energy_cost_inr != null ? `₹${k.energy_cost_inr}` : "—"} />
-          </div>
-          <div className="plan-grid">
-            <PlanCard title="Constrained machines" tone="amber" items={plan.capacity?.constrained_machines} empty="None"
-              extra={plan.capacity?.expected_shortfall_hours ? `${plan.capacity.expected_shortfall_hours}h shortfall` : null} />
-            <PlanCard title="Breakdown risk" tone="rose" items={plan.risk?.machines_at_risk} empty="All healthy" />
-            <PlanCard title="Top demand (7d)" tone="teal" items={(plan.demand?.top || []).map(d => `${d.product_id} · ${Math.round(d.units)} units`)} empty="—" />
-            <PlanCard title="Stockout risk" tone="rose" items={plan.demand?.stockout_risk} empty="None" />
-            <PlanCard title="Re-order materials" tone="blue" items={(plan.materials_to_reorder || []).map(m => `${m.material_id} ×${m.suggested_quantity}`)} empty="Stock OK" />
-            <PlanCard title="Orders missing due" tone="amber" count={plan.risk?.orders_missing_due}
-              items={(plan.risk?.at_risk_orders || []).map(o => `${o.order_id} +${o.days_over}d`)} empty="All on time" />
-          </div>
-          <details className="plan-sched">
-            <summary>Optimized schedule — first {plan.schedule?.length || 0} operations (OR-Tools · {plan.scenario})</summary>
-            <table>
-              <thead><tr><th>Order</th><th>Op</th><th>Machine</th><th>Workers</th><th>Start</th><th>End</th></tr></thead>
-              <tbody>
-                {(plan.schedule || []).map((a, i) => (
-                  <tr key={i}><td>{a.order_id}</td><td>{a.operation_id}</td><td>{a.machine_id}</td><td>{a.workers}</td><td>{a.start}</td><td>{a.end}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
-        </>
-      )}
-    </section>
-  );
-}
-
-function Kpi({ label, value }) {
-  return <div className="kpi"><div className="kpi-v">{value ?? "—"}</div><div className="kpi-l">{label}</div></div>;
-}
-
-function PlanCard({ title, tone, items, empty, extra, count }) {
-  const list = (items || []).filter(Boolean);
-  return (
-    <div className={`plan-mini ${tone}`}>
-      <div className="pm-title">{title}{count > 0 ? <span className="pm-count">{count}</span> : null}</div>
-      {list.length ? <ul>{list.slice(0, 5).map((x, i) => <li key={i}>{x}</li>)}</ul> : <div className="pm-empty">{empty || "—"}</div>}
-      {extra ? <div className="pm-extra">{extra}</div> : null}
     </div>
   );
 }
 
+function OrderResult({ r }) {
+  const mailed = r.email_status === "sent" || r.email_status === "simulated";
+  return (
+    <div className="order-success pop-in">
+      <div className="order-check">
+        <span className="check-badge">✓</span>
+        <div>
+          <div className="order-line1">Order placed</div>
+          <div className="order-line2">PO {r.po_id}</div>
+        </div>
+      </div>
+      <ul className="order-detail">
+        <li><span>Material</span><b>{r.material_name} ({r.material_id})</b></li>
+        <li><span>Quantity</span><b>{r.quantity?.toLocaleString?.() ?? r.quantity}</b></li>
+        <li><span>Est. cost</span><b>₹{r.estimated_cost_inr?.toLocaleString?.() ?? r.estimated_cost_inr}</b></li>
+        <li><span>Supplier</span><b>{r.supplier_id} · {r.lead_time_days}d lead</b></li>
+      </ul>
+      <div className={`mail-line ${mailed ? "ok" : "muted"}`}>
+        {mailed ? <><span className="check-badge sm">✓</span> Confirmation mail sent{r.email_to ? ` to ${r.email_to}` : ""}</> : "Mail not sent"}
+      </div>
+    </div>
+  );
+}
 
 function Message({ m, onAction }) {
-  if (m.role === "user") return <div className="msg user"><div className="bubble">{m.text}</div></div>;
-  if (m.role === "system") return <div className="msg system">{m.text}</div>;
+  if (m.role === "user") return <div className="msg user fade-in"><div className="bubble">{m.text}</div></div>;
+  if (m.role === "system") return <div className="msg system fade-in">{m.text}</div>;
+  if (m.role === "running")
+    return <div className="msg system fade-in"><span className="spinner" /> Running: {m.label}…</div>;
 
   if (m.role === "action") {
     const r = m.result || {};
+    const isChart = m.actionId === "generate_chart" && r.image_base64;
+    const isOrder = m.actionId === "place_reorder" && r.po_id;
     return (
-      <div className="msg assistant">
+      <div className="msg assistant fade-in">
         <div className="bubble action-result">
-          <div className="action-title">{m.label}</div>
-          <div className={`action-status ${r.status === "error" ? "err" : "good"}`}>
-            {r.status || "done"}{r.error ? `: ${r.error}` : ""}
-          </div>
-          {r.image_base64 && (
-            <img className="chart" alt="chart" src={`data:image/png;base64,${r.image_base64}`} />
+          {!isOrder && <div className="action-title">{m.label}</div>}
+          {!isChart && !isOrder && (
+            <div className={`action-status ${r.status === "error" ? "err" : "good"}`}>
+              {r.status || "done"}{r.error ? `: ${r.error}` : ""}
+            </div>
           )}
-          {r.po_id && <div className="mini">PO {r.po_id} · {r.material_name} × {r.quantity} · ₹{r.estimated_cost_inr}</div>}
-          {r.filename && !r.image_base64 && <div className="mini">Saved: {r.filename} ({r.rows} rows)</div>}
-          {r.subject && <div className="mini">Email “{r.subject}” → {r.to}</div>}
+          {isChart && <ChartResult r={r} onAction={onAction} />}
+          {isOrder && <OrderResult r={r} />}
+          {!isChart && !isOrder && r.filename && <div className="mini">Saved: {r.filename}{r.rows != null ? ` (${r.rows} rows)` : ""}</div>}
+          {!isChart && !isOrder && r.subject && (
+            <div className="mini">✉️ “{r.subject}” → {r.to}{r.attachment ? ` (with ${r.attachment})` : ""}</div>
+          )}
         </div>
       </div>
     );
@@ -254,13 +436,13 @@ function Message({ m, onAction }) {
   // assistant answer
   const d = m.data || {};
   return (
-    <div className="msg assistant">
+    <div className="msg assistant fade-in">
       <div className="bubble">
         <div className="answer-head">
           {d.agent && <AgentBadge agent={d.agent} />}
           {d.cached && <span className="cached">cached</span>}
         </div>
-        <div className="answer-msg">{d.message}</div>
+        <div className="answer-msg"><Markdown text={d.message} /></div>
         {d.details?.length > 0 && (
           <ul className="details">
             {d.details.slice(0, 10).map((x, i) => <li key={i}>{x}</li>)}

@@ -10,7 +10,7 @@ import ssl
 from datetime import datetime
 from email.message import EmailMessage
 
-from app.config import OUTBOX_DIR, settings
+from app.config import EXPORTS_DIR, OUTBOX_DIR, settings
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SUBJECT = 200
@@ -23,11 +23,23 @@ def _log_outbox(record: dict) -> None:
         fh.write(json.dumps(record) + "\n")
 
 
-def send_alert_email(subject: str, body: str, to: str | None = None) -> dict:
-    """Send (or simulate) an alert email. Returns a status dict; never raises on bad input."""
+def _safe_attachment(name: str | None) -> str | None:
+    """Resolve an attachment filename to a path inside EXPORTS_DIR only (no traversal)."""
+    if not name:
+        return None
+    base = os.path.basename(name)
+    path = os.path.join(EXPORTS_DIR, base)
+    return path if os.path.isfile(path) else None
+
+
+def send_alert_email(subject: str, body: str, to: str | None = None,
+                     attachment: str | None = None) -> dict:
+    """Send (or simulate) an email, optionally attaching a chart PNG from the exports folder.
+    Returns a status dict; never raises on bad input."""
     recipient = (to or settings.alert_email_to).strip()
     subject = (subject or "").strip()[:MAX_SUBJECT]
     body = (body or "")[:MAX_BODY]
+    attach_path = _safe_attachment(attachment)
 
     if not EMAIL_RE.match(recipient):
         return {"status": "error", "error": "invalid recipient email address"}
@@ -40,6 +52,7 @@ def send_alert_email(subject: str, body: str, to: str | None = None) -> dict:
         "from": settings.alert_email_from,
         "subject": subject,
         "body": body,
+        "attachment": os.path.basename(attach_path) if attach_path else None,
     }
 
     if not settings.has_smtp:
@@ -53,6 +66,10 @@ def send_alert_email(subject: str, body: str, to: str | None = None) -> dict:
         msg["From"] = settings.alert_email_from
         msg["To"] = recipient
         msg.set_content(body)
+        if attach_path:
+            with open(attach_path, "rb") as fh:
+                msg.add_attachment(fh.read(), maintype="image", subtype="png",
+                                   filename=os.path.basename(attach_path))
         context = ssl.create_default_context()
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
             server.starttls(context=context)
@@ -60,6 +77,7 @@ def send_alert_email(subject: str, body: str, to: str | None = None) -> dict:
                 server.login(settings.smtp_username, settings.smtp_password.get_secret_value())
             server.send_message(msg)
         _log_outbox({**record, "mode": "sent"})
-        return {"status": "sent", "to": recipient, "subject": subject}
+        return {"status": "sent", "to": recipient, "subject": subject,
+                "attachment": record["attachment"]}
     except Exception as exc:  # noqa: BLE001 - surface a safe message, no secrets
         return {"status": "error", "error": f"send failed: {type(exc).__name__}"}

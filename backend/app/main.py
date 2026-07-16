@@ -165,6 +165,41 @@ def api_regions() -> dict:
     return _safe(registry.demand_region_split)
 
 
+@app.get("/api/demand/forecast")
+def api_demand_forecast(horizon_days: int = 7) -> dict:
+    """Structured per-SKU forecast with P10/P50/P90 band + revenue (for the band chart view)."""
+    return _safe(registry.forecast_demand, horizon_days)
+
+
+@app.get("/api/machines")
+def api_machines(horizon_days: int = 7) -> dict:
+    """Per-machine health view: capacity utilisation merged with ML downtime risk / health /
+    failure type / maintenance window (for the Machines control-tower view)."""
+    def _build() -> dict:
+        cap = capacity_analysis(horizon_days)
+        health = {m["machine_id"]: m for m in registry.predict_downtime_latest()["machines"]}
+        machines = []
+        for m in cap["per_machine"]:
+            h = health.get(m["machine_id"], {})
+            machines.append({
+                "machine_id": m["machine_id"],
+                "machine_name": m["machine_name"],
+                "utilization_pct": m["utilization_pct"],
+                "p90_utilization_pct": m["p90_utilization_pct"],
+                "required_hours": m["required_hours"],
+                "available_hours": m["available_hours"],
+                "expected_shortfall_hours": m["expected_shortfall_hours"],
+                "status": m["status"],
+                "downtime_risk_pct": h.get("downtime_risk_pct", 0.0),
+                "health_index": h.get("health_index", 100.0),
+                "failure_type": h.get("failure_type", "None"),
+                "alert": h.get("alert", False),
+            })
+        return {"machines": machines, "constrained_machines": cap["constrained_machines"],
+                "machines_at_risk": [m["machine_id"] for m in machines if m["alert"]]}
+    return _safe(_build)
+
+
 @app.get("/api/reorder/recommendations")
 def api_reorder_recs(horizon_days: int = 7) -> dict:
     return reorder_recommendations(horizon_days)
@@ -189,7 +224,7 @@ def api_plan_regenerate(scenario: str = "min_risk") -> dict:
 
 
 # ---- confirmed actions (human-in-the-loop) --------------------------------
-_ACTIONS = {"send_email", "place_reorder", "generate_chart", "export_plan"}
+_ACTIONS = {"send_email", "place_reorder", "generate_chart", "export_plan", "email_chart"}
 
 
 @app.post("/api/actions/execute")
@@ -200,11 +235,17 @@ def execute_action(req: ActionRequest) -> dict:
         log.warning("ACTION rejected: unknown id=%s", aid)
         return {"status": "error", "error": f"unknown action '{aid}'"}
     if aid == "send_email":
-        res = send_alert_email(p.get("subject", ""), p.get("body", ""), p.get("to"))
+        res = send_alert_email(p.get("subject", ""), p.get("body", ""), p.get("to"),
+                               attachment=p.get("attachment"))
+    elif aid == "email_chart":
+        res = send_alert_email(
+            p.get("subject", "Production insight chart"),
+            p.get("body", "Please find the attached production insight chart."),
+            p.get("to"), attachment=p.get("filename"))
     elif aid == "place_reorder":
         res = place_reorder(p.get("material_id", ""), p.get("quantity", 0), p.get("reason", ""))
     elif aid == "generate_chart":
-        res = generate_chart(p.get("kind", ""))
+        res = generate_chart(p.get("kind", ""), p.get("chart_type"))
     elif aid == "export_plan":
         res = export_schedule(p.get("scenario", "min_risk"), int(p.get("max_orders", 12)))
     else:

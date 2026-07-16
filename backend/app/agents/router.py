@@ -81,7 +81,8 @@ def route(query: str) -> dict:
         headline = f"Primary bottleneck: {data['primary_bottleneck']}"
         details = [f"{b['machine_id']}: score {b['bottleneck_score']:.0f} "
                    f"(util {b['utilization_pct']:.0f}%, {b['pending_jobs']} jobs)" for b in data["bottlenecks"]]
-        actions = [_chart_action("bottleneck", "Show bottleneck chart")]
+        actions = [_chart_action("bottleneck", "Bar: bottleneck scores"),
+                   _chart_action("util_vs_risk", "Scatter: utilisation vs failure")]
         agent = "Capacity & Scheduling"
 
     elif intent in ("schedule", "scenario"):
@@ -136,7 +137,8 @@ def route(query: str) -> dict:
         data = T.tool_downtime_risk()
         headline = data["headline"]
         details = data["details"]
-        actions = [_chart_action("downtime", "Show downtime-risk chart")]
+        actions = [_chart_action("downtime", "Bar: downtime risk"),
+                   _chart_action("fault_types", "Pie: fault-type breakdown")]
         at_risk = data.get("recommended_actions", [])
         if any("maintenance" in a.lower() for a in at_risk):
             actions.insert(0, _email_action("Machine maintenance alert", details))
@@ -146,7 +148,8 @@ def route(query: str) -> dict:
         data = T.tool_demand_forecast()
         headline = data["headline"]
         details = data["details"]
-        actions = [_chart_action("demand", "Show demand-forecast chart")]
+        actions = [_chart_action("demand", "Bar: demand forecast"),
+                   _chart_action("demand_regions", "Pie: demand by region")]
         agent = "Demand & Inventory"
 
     elif intent == "reorder":

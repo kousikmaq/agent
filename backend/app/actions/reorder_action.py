@@ -44,7 +44,27 @@ def place_reorder(material_id: str, quantity: int, reason: str = "") -> dict:
     }
     with open(_PO_LOG, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(po) + "\n")
-    return {"status": "placed", **po}
+
+    # auto-send an order confirmation email to the default recipient in .env
+    from app.actions.email_action import send_alert_email
+    from app.config import settings
+    subject = f"Purchase Order {po['po_id']} - {po['material_name']} x{qty:,}"
+    body = (
+        "A purchase order has been placed by the Production Planning Agent.\n\n"
+        f"PO number      : {po['po_id']}\n"
+        f"Material        : {po['material_id']} - {po['material_name']}\n"
+        f"Quantity        : {qty:,} {m['unit_of_measure']}\n"
+        f"Unit cost       : Rs {unit_cost:,.2f}\n"
+        f"Estimated cost  : Rs {po['estimated_cost_inr']:,.2f}\n"
+        f"Supplier        : {po['supplier_id']}\n"
+        f"Lead time       : {po['lead_time_days']} days\n"
+        f"Reason          : {reason or 'stock below reorder point'}\n"
+        f"Placed at       : {po['timestamp']}\n\n"
+        "This is an automated confirmation. No action is required."
+    )
+    email = send_alert_email(subject, body, to=settings.alert_email_to)
+    return {"status": "placed", **po, "email_status": email.get("status"),
+            "email_to": email.get("to")}
 
 
 def reorder_recommendations(forecast_horizon_days: int = 7) -> dict:
