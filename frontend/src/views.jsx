@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   getScenarios, getSchedule, getMachines, getPrioritize, getOrderRisk,
-  getDemandForecast, getStockout, getReorderRecs, getAllocation,
+  getDemandForecast, getStockout, getReorderRecs, getAllocation, getCapacity,
 } from "./api";
 
 /* ------------------------------ helpers ------------------------------ */
@@ -31,6 +31,7 @@ function ViewError({ msg }) {
 const ABOUT = {
   dashboard: "This is your weekly control center. The plan card shows the optimised production plan; the tiles summarise capacity, bottlenecks, delay and downtime risk, demand and materials; and the alert center lists the actions worth taking now. Tap any tile to dive in, or ask Copilot about it.",
   plan: "The master plan is produced by the OR-Tools optimiser for the selected scenario. Compare scenarios to see the trade-off between throughput, on-time delivery (risk) and energy cost, then export the plan or ask Copilot which scenario best fits your goal.",
+  capacity: "Capacity is how much work each machine can do versus how much the plan asks of it. Available hours start from the calendar (days × 24h for up to 3 shifts) and are then de-rated by each machine's predicted downtime, so the number is realistic — not optimistic. Utilisation = required ÷ available; anything over 100% is over capacity. Every figure here shows its own working, so nothing is a black box.",
   schedule: "This Gantt shows exactly when each operation runs on each machine for the chosen scenario. Bars are operations coloured by order — longer bars take longer. Use it to spot machine congestion and see how switching scenario re-sequences the line.",
   machines: "Each card shows how loaded a machine is (utilisation) and how healthy it is (an ML downtime score, 0–100). Red means over-capacity or likely to fail, with the predicted fault type when sensors flag a risk. Prioritise maintenance on machines with low health and high load.",
   orders: "Orders are ranked by priority (urgency, importance and value) and scored for delay risk by the ML model. 'Days over' estimates how late an order may finish and 'Miss due?' flags likely due-date breaches. Start with the highest-priority, highest-risk orders.",
@@ -242,24 +243,58 @@ export function PlanView({ plan, scenario }) {
 }
 
 /* ------------------------------ Schedule / Gantt ------------------------------ */
+// Frontend cache so the Gantt for each of the three scenarios is kept and re-shown instantly.
+const scheduleCache = new Map();
+
+const SCHED_SCENARIO = {
+  min_risk: { label: "Min risk", goal: "protect due dates by minimising total lateness (tardiness)" },
+  max_throughput: { label: "Max throughput", goal: "finish everything as early as possible (shortest makespan)" },
+  min_cost: { label: "Min cost", goal: "favour the most energy-efficient machines to cut running cost" },
+};
+
+const SCHED_KPI_DEFS = [
+  ["Makespan", (k, d) => `${k.makespan_hours}h`,
+    "The length of the whole plan — from the first operation starting to the last one finishing. Shorter means the line clears sooner."],
+  ["Tardiness", (k, d) => `${k.total_tardiness_hours}h`,
+    "Total hours by which orders finish after their due dates, added up across all orders. 0 means nothing is late."],
+  ["Energy", (k, d) => `₹${k.total_energy_cost_inr}`,
+    "Estimated electricity cost of running the machines for this plan (machine kWh × hours × tariff)."],
+  ["Operations", (k, d) => `${d.operations_scheduled}`,
+    "How many individual operations (steps like Mixing, Filling, Packaging) were placed on the timeline."],
+];
+
 export function ScheduleGantt({ scenario }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [cached, setCached] = useState(false);
   useEffect(() => {
-    setData(null); setErr(null);
-    getSchedule(scenario, 12).then(setData).catch((e) => setErr(String(e)));
+    const key = `${scenario}:12`;
+    if (scheduleCache.has(key)) {
+      setData(scheduleCache.get(key)); setErr(null); setCached(true);
+    } else {
+      setData(null); setErr(null); setCached(false);
+      getSchedule(scenario, 12).then((d) => { scheduleCache.set(key, d); setData(d); }).catch((e) => setErr(String(e)));
+    }
+    // Warm the other two scenarios in the background so switching is instant.
+    for (const sc of ["min_risk", "max_throughput", "min_cost"]) {
+      if (sc === scenario) continue;
+      const k2 = `${sc}:12`;
+      if (!scheduleCache.has(k2)) getSchedule(sc, 12).then((d) => scheduleCache.set(k2, d)).catch(() => {});
+    }
   }, [scenario]);
   if (err) return <ViewError msg={err} />;
   if (!data) return <div className="view"><h3 className="section-h">Machine schedule (Gantt)</h3><Loading label="Solving schedule with OR-Tools…" /></div>;
 
   const asg = data.assignments || [];
   const rowsByMachine = {};
+  const orderIds = [];
   let tMin = Infinity, tMax = -Infinity;
   for (const a of asg) {
     const s = parseDT(a.start), e = parseDT(a.end);
     if (!s || !e) continue;
     tMin = Math.min(tMin, s.getTime());
     tMax = Math.max(tMax, e.getTime());
+    if (!orderIds.includes(a.order_id)) orderIds.push(a.order_id);
     for (const mid of String(a.machine_id).split(";")) {
       (rowsByMachine[mid] ||= []).push({ ...a, s, e });
     }
@@ -267,6 +302,7 @@ export function ScheduleGantt({ scenario }) {
   const machines = Object.keys(rowsByMachine).sort();
   const span = Math.max(1, tMax - tMin);
   const k = data.kpis || {};
+  const scInfo = SCHED_SCENARIO[data.scenario] || { label: data.scenario, goal: "" };
   const ticks = 6;
   const tickEls = Array.from({ length: ticks + 1 }, (_, i) => {
     const t = new Date(tMin + (span * i) / ticks);
@@ -276,7 +312,7 @@ export function ScheduleGantt({ scenario }) {
   return (
     <div className="view">
       <div className="gantt-head">
-        <h3 className="section-h">Machine schedule (Gantt) · {data.scenario}</h3>
+        <h3 className="section-h">Machine schedule (Gantt) · {scInfo.label}{cached && <span className="sched-cached"> ⚡ cached</span>}</h3>
         <div className="gantt-kpis">
           <span>Makespan <b>{k.makespan_hours}h</b></span>
           <span>Tardiness <b>{k.total_tardiness_hours}h</b></span>
@@ -284,6 +320,12 @@ export function ScheduleGantt({ scenario }) {
           <span>Ops <b>{data.operations_scheduled}</b></span>
         </div>
       </div>
+
+      <div className="sched-scenario-note">
+        <b>Scenario: {scInfo.label}.</b> This timeline is optimised to {scInfo.goal}. Switch the scenario
+        in the top bar to see how the same orders are re-sequenced — each one is cached, so it's instant.
+      </div>
+
       <div className="gantt">
         <div className="gantt-axis">
           <div className="gantt-axis-label" />
@@ -309,8 +351,334 @@ export function ScheduleGantt({ scenario }) {
           </div>
         ))}
       </div>
-      <div className="gantt-note">Bars are scheduled operations. Hover a bar for order, time, workers and energy. Multi-machine ops appear on each machine.</div>
+
+      {orderIds.length > 0 && (
+        <div className="sched-legend">
+          {orderIds.map((oid) => (
+            <span key={oid} className="sched-chip"><i style={{ background: colorFor(oid) }} />{oid}</span>
+          ))}
+        </div>
+      )}
+
+      <div className="sched-explain">
+        <h3 className="section-h">What this schedule shows</h3>
+        <p className="sched-intro">
+          A Gantt chart is a timeline of the shop floor. Each <b>row is a machine</b> and each <b>coloured bar is one
+          operation</b> running on it, positioned left-to-right by <b>when it happens</b> and sized by <b>how long it
+          takes</b>. Bars are coloured by order (see the legend), so you can follow one order as it moves through
+          Mixing → Blending → Carbonation → Filling → Labeling → Packaging. Hover any bar for its order, exact times,
+          workers and energy.
+        </p>
+
+        <div className="sched-defs">
+          {SCHED_KPI_DEFS.map(([label, val, desc]) => (
+            <div key={label} className="sched-def">
+              <div className="sched-def-h">{label}</div>
+              <div className="sched-def-v">{val(k, data)}</div>
+              <div className="sched-def-p">{desc}</div>
+            </div>
+          ))}
+        </div>
+
+        <h3 className="section-h">How to read it</h3>
+        <ul className="sched-read">
+          <li><b>Gaps</b> on a machine row are idle time; <b>tightly packed</b> rows are your busy (bottleneck) machines.</li>
+          <li>The same order's bars appear on several rows in sequence — that's the order flowing through its operations.</li>
+          <li>An operation split across two machines (lot-splitting) shows a bar on each of those machine rows.</li>
+          <li>Switching scenario re-sequences everything to chase a different goal — watch the KPIs above change with it.</li>
+        </ul>
+      </div>
+
       <ViewAbout k="schedule" />
+    </div>
+  );
+}
+
+/* ------------------------------ Capacity ------------------------------ */
+function capTone(util) {
+  return util > 100 ? "rose" : util > 85 ? "amber" : "green";
+}
+
+const CAP_SCALE = 150; // % of capacity the load bar spans to (100% marker sits at 2/3)
+
+// Plain-language meaning of a machine's status, with the exact thresholds spelled out.
+function statusMeaning(m) {
+  const u = Math.round(m.utilization_pct);
+  if (m.utilization_pct > 100) {
+    return {
+      tag: "Over capacity",
+      text: `It needs about ${u}% of a full week's time — that's ${u - 100}% more work than it can fit. `
+        + `The extra (~${m.expected_shortfall_hours}h) won't get done unless you add overtime or move some orders to another machine.`,
+    };
+  }
+  if (m.utilization_pct > 85) {
+    return {
+      tag: "Almost full",
+      text: `It's using about ${u}% of the week's time — nearly all of it. The work just fits, but there's `
+        + `barely any spare, so even a small delay or breakdown could cause problems.`,
+    };
+  }
+  return {
+    tag: "Plenty of room",
+    text: `It's using only about ${u}% of the week's time, so there's plenty to spare. `
+      + `It can handle the work easily and could take on more.`,
+  };
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
+
+// Frontend-only what-if: move the overloaded machines' excess hours onto machines that still
+// have spare room (<=85% used), then recompute each machine's numbers. Purely illustrative —
+// it never touches the backend or the real plan.
+function rebalanceMachines(machines) {
+  const ms = machines.map((m) => ({ ...m, _r: m.utilization_pct ? m.p90_utilization_pct / m.utilization_pct : 1 }));
+  const over = ms.filter((m) => m.utilization_pct > 100);
+  const receivers = ms.filter((m) => m.utilization_pct <= 85);
+  const totalExcess = over.reduce((s, m) => s + (m.required_hours - m.available_hours), 0);
+  const rooms = receivers.map((m) => Math.max(0, m.available_hours - m.required_hours));
+  const totalRoom = rooms.reduce((a, b) => a + b, 0);
+  if (!over.length || totalExcess <= 0 || totalRoom <= 0) return null;
+
+  const moved = Math.min(totalExcess, totalRoom);
+  over.forEach((m) => {
+    const out = moved * ((m.required_hours - m.available_hours) / totalExcess);
+    m.required_hours = round2(m.required_hours - out);
+  });
+  receivers.forEach((m, i) => {
+    const inc = moved * (rooms[i] / totalRoom);
+    m.required_hours = round2(m.required_hours + inc);
+  });
+  ms.forEach((m) => {
+    m.utilization_pct = m.available_hours ? round2((m.required_hours / m.available_hours) * 100) : 0;
+    m.p90_utilization_pct = round2(m.utilization_pct * m._r);
+    m.expected_shortfall_hours = round2(Math.max(0, m.required_hours - m.available_hours));
+    m.suggested_overtime_hours = m.expected_shortfall_hours;
+    m.status = m.utilization_pct > 100 ? "OVER_CAPACITY" : m.utilization_pct > 85 ? "CONSTRAINED" : "OK";
+    delete m._r;
+  });
+  return { machines: ms, movedHours: round2(moved), fromCount: over.length, toCount: receivers.length };
+}
+
+function CapacityBar({ util, p90 }) {
+  const w = Math.min(util, CAP_SCALE) / CAP_SCALE * 100;
+  const wP90 = Math.min(p90, CAP_SCALE) / CAP_SCALE * 100;
+  const marker = (100 / CAP_SCALE) * 100; // where the 100% line sits
+  return (
+    <div className="capbar">
+      <div className="capbar-track">
+        <div className={`capbar-p90 ${capTone(util)}`} style={{ width: `${wP90}%` }} title={`P90 (busy case): ${p90}%`} />
+        <div className={`capbar-fill ${capTone(util)}`} style={{ width: `${w}%` }} />
+        <div className="capbar-marker" style={{ left: `${marker}%` }}><span>100%</span></div>
+      </div>
+    </div>
+  );
+}
+
+function MachineCapCard({ m, orig, canRebalance, onRebalance }) {
+  const [open, setOpen] = useState(false);
+  const tone = capTone(m.utilization_pct);
+  const derateFrac = (m.downtime_derate_pct / 100).toFixed(2);
+  const meaning = statusMeaning(m);
+  const changed = orig && Math.round(orig.utilization_pct) !== Math.round(m.utilization_pct);
+  return (
+    <div className={`capcard ${tone} ${open ? "open" : ""} ${changed ? "shifted" : ""}`} onClick={() => setOpen((o) => !o)}>
+      <div className="capcard-head">
+        <div>
+          <span className="capcard-id">{m.machine_id}</span>
+          <span className="capcard-name">{m.machine_name}</span>
+        </div>
+        <div className="capcard-headright">
+          <span className={`capcard-status ${tone}`}>{m.status.replace(/_/g, " ")}</span>
+          <span className="capcard-chev">{open ? "▾" : "▸"}</span>
+        </div>
+      </div>
+
+      <div className="capcard-util">
+        <b>{Math.round(m.utilization_pct)}%</b>
+        <span>utilised · P90 {Math.round(m.p90_utilization_pct)}%</span>
+        {changed && <span className={`capcard-delta ${m.utilization_pct < orig.utilization_pct ? "down" : "up"}`}>
+          was {Math.round(orig.utilization_pct)}%
+        </span>}
+      </div>
+      <CapacityBar util={m.utilization_pct} p90={m.p90_utilization_pct} />
+
+      <div className={`capcard-why ${tone}`}>
+        <b>{meaning.tag}.</b> {meaning.text}
+      </div>
+
+      {!open && (
+        <div className="capcard-actions">
+          <span className="capcard-more">Click for details ▸</span>
+          {canRebalance && m.utilization_pct > 100 && (
+            <button className="capcard-rebtn" onClick={(e) => { e.stopPropagation(); onRebalance(); }}
+              title="Move the extra work onto machines that have spare room (what-if only)">
+              ⚖ Auto-balance load
+            </button>
+          )}
+        </div>
+      )}
+
+      {open && (
+        <div className="capcard-detail">
+          <div className="capcard-stats">
+            <div><span>Required</span><b>{m.required_hours}h</b></div>
+            <div><span>Available</span><b>{m.available_hours}h</b></div>
+            <div><span>Downtime de-rate</span><b>{m.downtime_derate_pct}%</b></div>
+            <div><span>Shortfall</span><b className={m.expected_shortfall_hours > 0 ? "danger" : ""}>{m.expected_shortfall_hours}h</b></div>
+          </div>
+
+          <div className="capcard-defs">
+            <div className="capdef">
+              <b>Downtime de-rate ({m.downtime_derate_pct}%)</b>
+              <p>How much of the week we expect this machine to be <em>down</em> (breakdowns/maintenance),
+                so we don't plan on time it won't really have. This machine is predicted to be down about
+                {" "}<b>{m.downtime_derate_pct}%</b> of the time, so we keep only {(1 - m.downtime_derate_pct / 100).toFixed(2)} of
+                its hours: {m.raw_available_hours}h × (1 − {derateFrac}) = <b>{m.available_hours}h</b>.</p>
+              <p className="capdef-note">Each machine has a different number because each has its own reliability —
+                a dependable machine loses only a little, a fault-prone one loses more (up to a 50% cap).</p>
+            </div>
+            <div className="capdef">
+              <b>Shortfall ({m.expected_shortfall_hours}h)</b>
+              <p>The hours of work that don't fit — how much the required work is bigger than the available
+                time: max(0, {m.required_hours} − {m.available_hours}) = <b>{m.expected_shortfall_hours}h</b>.
+                {m.expected_shortfall_hours > 0
+                  ? " That's the overtime to add, or the work to move to another machine."
+                  : " Zero here means everything fits."}</p>
+            </div>
+          </div>
+
+          <div className="capcard-math">
+            <div className="math-title">How it's computed</div>
+            <div className="math-line"><span>Available hours</span>
+              <code>{m.raw_available_hours}h × (1 − {derateFrac}) = {m.available_hours}h</code>
+              <em>{m.raw_available_hours}h in the week, minus this machine's {m.downtime_derate_pct}% predicted downtime</em>
+            </div>
+            <div className="math-line"><span>Utilisation</span>
+              <code>{m.required_hours}h ÷ {m.available_hours}h = {Math.round(m.utilization_pct)}%</code>
+              <em>required work ÷ realistic available hours</em>
+            </div>
+            <div className="math-line"><span>Busy case (P90)</span>
+              <code>{Math.round(m.p90_utilization_pct)}%</code>
+              <em>using P90 (worst-case) predicted durations</em>
+            </div>
+            <div className="math-line"><span>Shortfall</span>
+              <code>max(0, {m.required_hours} − {m.available_hours}) = {m.expected_shortfall_hours}h</code>
+              <em>suggested overtime to clear the overload</em>
+            </div>
+            <div className="math-line"><span>Status</span>
+              <code>{m.status.replace(/_/g, " ")}</code>
+              <em>over 100% = over capacity · over 85% = constrained</em>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CapKpi({ label, value, sub, tone = "", hint, plain }) {
+  return (
+    <div className={`capkpi ${tone}`} title={hint}>
+      <div className="capkpi-label">{label}{hint && <span className="capkpi-i">ⓘ</span>}</div>
+      <div className="capkpi-value">{value}</div>
+      {sub && <div className="capkpi-sub">{sub}</div>}
+      {plain && <div className="capkpi-plain">{plain}</div>}
+    </div>
+  );
+}
+
+export function CapacityView({ onAsk }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [sim, setSim] = useState(null);
+  useEffect(() => { getCapacity(7).then(setData).catch((e) => setErr(String(e))); }, []);
+  if (err) return <ViewError msg={err} />;
+  if (!data) return <div className="view"><h3 className="section-h">Capacity analysis</h3><Loading label="Analysing capacity…" /></div>;
+
+  const baseMachines = [...(data.per_machine || [])].sort((a, b) => b.utilization_pct - a.utilization_pct);
+  const origById = {};
+  for (const m of baseMachines) origById[m.machine_id] = m;
+  const machines = sim ? [...sim.machines].sort((a, b) => b.utilization_pct - a.utilization_pct) : baseMachines;
+
+  const canRebalance = !sim
+    && baseMachines.some((m) => m.utilization_pct > 100)
+    && baseMachines.some((m) => m.utilization_pct <= 85 && (m.available_hours - m.required_hours) > 0);
+  const doRebalance = () => { const r = rebalanceMachines(baseMachines); if (r) setSim(r); };
+
+  // KPIs are recomputed from the active machine set so they reflect the rebalance too.
+  const totalReq = machines.reduce((s, m) => s + m.required_hours, 0);
+  const totalAvail = machines.reduce((s, m) => s + m.available_hours, 0);
+  const overall = totalAvail ? (totalReq / totalAvail) * 100 : 0;
+  const totalShortfall = machines.reduce((s, m) => s + m.expected_shortfall_hours, 0);
+  const constrained = machines.filter((m) => m.utilization_pct > 85).map((m) => m.machine_id);
+  const primary = machines[0];
+
+  return (
+    <div className="view">
+      <div className="cap-headrow">
+        <h3 className="section-h">Capacity analysis · next {data.horizon_days} days</h3>
+        <button className="tile-ask" onClick={() => onAsk("Is our capacity enough to handle this week's load?")}>Ask the assistant ▸</button>
+      </div>
+
+      {sim && (
+        <div className="cap-rebalance-banner">
+          <span>⚖ <b>What-if rebalance</b> — moved about <b>{sim.movedHours}h</b> from {sim.fromCount} overloaded
+            machine(s) onto {sim.toCount} with spare room. This is an illustrative view only; the real plan is unchanged.</span>
+          <button onClick={() => setSim(null)}>↺ Reset to actual</button>
+        </div>
+      )}
+
+      <div className="capkpis">
+        <CapKpi label="Overall utilisation" value={`${Math.round(overall)}%`}
+          tone={capTone(overall)} sub={totalShortfall > 0.5 ? "shortfall" : "sufficient"}
+          hint="Total required hours ÷ total available hours across all machines"
+          plain="How busy the whole plant is. Over 100% means there's more work than machine time available." />
+        <CapKpi label="Required" value={`${Math.round(totalReq)}h`}
+          sub="predicted work this horizon" hint="Sum of predicted operation durations for pending orders"
+          plain="The total machine-hours all the planned orders need this week." />
+        <CapKpi label="Available" value={`${Math.round(totalAvail)}h`}
+          sub="after downtime de-rate" hint="Calendar hours de-rated by each machine's predicted downtime"
+          plain="The machine-hours we actually have — after setting time aside for expected breakdowns." />
+        <CapKpi label="Shortfall" value={`${Math.round(totalShortfall)}h`}
+          tone={totalShortfall > 0.5 ? "rose" : "green"} sub="suggested overtime"
+          hint="Hours by which required load exceeds available capacity"
+          plain="Hours of work that don't fit. This is the gap to cover with overtime or by moving orders." />
+        <CapKpi label="Constrained" value={constrained.length}
+          tone={constrained.length ? "amber" : "green"} sub={constrained.join(", ") || "none"}
+          hint="Machines over 85% utilisation"
+          plain="How many machines are running hot (above 85%). These are the ones to watch first." />
+      </div>
+
+      {primary && (
+        <div className={`cap-verdict ${capTone(primary.utilization_pct)}`}>
+          <b>{primary.machine_id} {primary.machine_name}</b> is the tightest constraint at{" "}
+          <b>{Math.round(primary.utilization_pct)}%</b>
+          {primary.expected_shortfall_hours > 0
+            ? <> — about <b>{primary.expected_shortfall_hours}h</b> of overtime would clear it.</>
+            : <> — still within capacity.</>}
+        </div>
+      )}
+
+      <h3 className="section-h">Load vs capacity, by machine</h3>
+      <div className="capgrid">
+        {machines.map((m) => (
+          <MachineCapCard key={m.machine_id} m={m} orig={origById[m.machine_id]}
+            canRebalance={canRebalance} onRebalance={doRebalance} />
+        ))}
+      </div>
+
+      <div className="cap-assumptions">
+        <div className="cap-ass-title">Assumptions &amp; method <span>({data.method})</span></div>
+        <ul>
+          <li>Available time = horizon days × 24h (up to three 8-hour shifts).</li>
+          <li>Availability is de-rated by each machine's predicted downtime (capped at 50%), so estimates aren't optimistic.</li>
+          <li>Required hours use ML-predicted operation durations; P90 is the busy-case estimate.</li>
+          <li>Thresholds: over 100% = over capacity, over 85% = constrained.</li>
+          <li><b>Auto-balance</b> is a what-if only: it shifts overloaded hours onto machines with spare room to show what a rebalanced plan could look like. It does not change the real schedule.</li>
+        </ul>
+      </div>
+
+      <ViewAbout k="capacity" />
     </div>
   );
 }

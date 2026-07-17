@@ -37,6 +37,10 @@ export function getScenarios(maxOrders = 12) {
   return fetch(`/api/scenarios?max_orders=${maxOrders}`).then(json);
 }
 
+export function getCapacity(horizonDays = 7) {
+  return fetch(`/api/capacity?horizon_days=${horizonDays}`).then(json);
+}
+
 export function getMachines() {
   return fetch("/api/machines").then(json);
 }

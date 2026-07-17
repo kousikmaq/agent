@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { getPlan, regeneratePlan, sendChat, executeAction, getInsights } from "./api";
 import { useAuth } from "./auth/authContext";
 import {
-  Dashboard, PlanView, ScheduleGantt, MachinesView, OrdersView, DemandView, WorkforceView,
+  Dashboard, CapacityView, PlanView, ScheduleGantt, MachinesView, OrdersView, DemandView, WorkforceView,
 } from "./views";
 
 const InsightsReport = lazy(() => import("./insights"));
@@ -22,6 +22,13 @@ const SUGGESTIONS = {
     "Forecast demand for the next week",
     "Which materials should we re-order?",
     "How should we allocate the workforce this week?",
+  ],
+  capacity: [
+    "Is our capacity enough to handle this week's load?",
+    "Which machine is the tightest capacity constraint?",
+    "Why is M03 over capacity?",
+    "How much overtime would clear the shortfall?",
+    "How is utilisation calculated?",
   ],
   plan: [
     "Summarise this week's master plan",
@@ -68,7 +75,7 @@ const SUGGESTIONS = {
 };
 
 const VIEW_TITLES = {
-  dashboard: "Dashboard", plan: "Plan", schedule: "Schedule", machines: "Machines",
+  dashboard: "Dashboard", capacity: "Capacity", plan: "Plan", schedule: "Schedule", machines: "Machines",
   orders: "Orders", demand: "Demand", workforce: "Workforce",
 };
 
@@ -284,7 +291,7 @@ export default function App() {
   return (
     <div className="app-shell">
       {exited && <ExitScreen onReopen={() => setExited(false)} />}
-      <TopBar plan={plan} scenario={scenario} onScenario={setScenario}
+      <TopBar plan={plan} view={view} scenario={scenario} onScenario={setScenario}
         onRefresh={regen} refreshing={planLoading} user={user} onLogout={logout}
         onToggleNav={() => setNavCollapsed((c) => !c)} />
       <div className={`shell-body ${assistantOpen && !maximized ? "" : "no-assistant"} ${navCollapsed ? "nav-collapsed" : ""}`}>
@@ -377,6 +384,7 @@ function ExitScreen({ onReopen }) {
 
 const NAV = [
   { key: "dashboard", icon: "▣", label: "Dashboard" },
+  { key: "capacity", icon: "▮", label: "Capacity" },
   { key: "plan", icon: "▤", label: "Plan" },
   { key: "schedule", icon: "▦", label: "Schedule" },
   { key: "machines", icon: "⚙", label: "Machines" },
@@ -404,6 +412,7 @@ function LeftNav({ view, onNav, collapsed, onExit }) {
 
 const VIEW_BLURB = {
   dashboard: "Your weekly control center — plan, live status and the actions worth taking now.",
+  capacity: "Load vs capacity per machine — with the working shown for every number.",
   plan: "The optimised weekly plan and how the scenarios trade off throughput, risk and cost.",
   schedule: "When each operation runs on each machine for the chosen scenario.",
   machines: "How loaded and how healthy each machine is right now.",
@@ -443,7 +452,8 @@ function UserMenu({ user, onLogout }) {
   );
 }
 
-function TopBar({ scenario, onScenario, onRefresh, refreshing, user, onLogout, onToggleNav }) {
+function TopBar({ view, scenario, onScenario, onRefresh, refreshing, user, onLogout, onToggleNav }) {
+  const showScenarios = view === "dashboard" || view === "plan" || view === "schedule";
   return (
     <header className="topbar2">
       <div className="tb-left">
@@ -453,12 +463,14 @@ function TopBar({ scenario, onScenario, onRefresh, refreshing, user, onLogout, o
       </div>
 
       <div className="tb-center">
-        <div className="scn-seg">
-          {SCENARIOS.map((s) => (
-            <button key={s.key} className={`scn-btn ${scenario === s.key ? "active" : ""}`}
-              onClick={() => onScenario(s.key)}>{s.label}</button>
-          ))}
-        </div>
+        {showScenarios && (
+          <div className="scn-seg">
+            {SCENARIOS.map((s) => (
+              <button key={s.key} className={`scn-btn ${scenario === s.key ? "active" : ""}`}
+                onClick={() => onScenario(s.key)}>{s.label}</button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="tb-right">
@@ -473,6 +485,7 @@ function TopBar({ scenario, onScenario, onRefresh, refreshing, user, onLogout, o
 
 function MainView({ view, plan, scenario, onNav, onAsk, onAction }) {
   switch (view) {
+    case "capacity": return <CapacityView onAsk={onAsk} />;
     case "plan": return <PlanView plan={plan} scenario={scenario} />;
     case "schedule": return <ScheduleGantt scenario={scenario} />;
     case "machines": return <MachinesView onAsk={onAsk} />;
