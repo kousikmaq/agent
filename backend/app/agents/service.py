@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 
 from app.agents.chat_client import azure_available
+from app.agents.guardrails import screen
 from app.agents.router import route
 from app.cache.semantic_cache import get_cache
 from app.logging_config import log
@@ -31,6 +32,25 @@ async def answer(query: str, use_cache: bool = True) -> dict:
         return {"query": query, "error": "empty query"}
     t0 = time.perf_counter()
     log.info("CHAT   query=%r", query)
+
+    # Guardrail: intercept greetings, vague, off-topic and unsafe input before any analysis
+    # or LLM call, and return a safe on-brand reply that steers back to the assistant's job.
+    guard = screen(query)
+    if guard is not None:
+        log.info("GUARD  intercepted (%s) -> canned response in %.2fs",
+                 guard["guardrail"], time.perf_counter() - t0)
+        return {
+            "query": query,
+            "intent": guard["intent"],
+            "agent": guard["agent"],
+            "message": guard["message"],
+            "headline": guard["headline"],
+            "details": guard["details"],
+            "data": guard["data"],
+            "suggested_actions": guard["suggested_actions"],
+            "llm_used": False,
+            "cached": False,
+        }
 
     # Cache LLM answers and router (no-key) answers separately, so enabling the LLM never
     # returns a stale router-mode answer.

@@ -34,6 +34,8 @@ Returns a JSON-serializable plan with the assignment, timings and scenario KPIs.
 """
 from __future__ import annotations
 
+import json
+import os
 from datetime import timedelta
 from itertools import combinations
 
@@ -49,6 +51,38 @@ SETUP_MINUTES = 15            # changeover/cleanup buffer reserved on a machine 
 MAINTENANCE_SCALE_MIN = 600   # maintenance window length = (1 - reliability_index) * this
 MIN_OP_MINUTES = 5            # a mode can never compress an operation below this
 MAX_PARALLEL_MACHINES = 2     # cap on how many machines one operation may be split across
+
+
+# --- Scenario-comparison cache (persisted so the Plan view opens instantly) ---
+_SCEN_CACHE: dict = {}
+_SCEN_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "exports", "scenario_cache")
+_SCEN_DIR = os.path.abspath(_SCEN_DIR)
+os.makedirs(_SCEN_DIR, exist_ok=True)
+
+
+def _scen_disk_path(max_orders: int) -> str:
+    from app.cache.semantic_cache import _data_version
+    return os.path.join(_SCEN_DIR, f"scenarios_{_data_version()}_{int(max_orders)}.json")
+
+
+def _load_scen_disk(max_orders: int) -> dict | None:
+    path = _scen_disk_path(max_orders)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:  # noqa: BLE001 - a corrupt cache just triggers a rebuild
+        return None
+
+
+def _save_scen_disk(max_orders: int, payload: dict) -> None:
+    try:
+        with open(_scen_disk_path(max_orders), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+    except Exception:  # noqa: BLE001 - never fail a request on a cache-write issue
+        pass
+
 
 
 def _order_selection(max_orders: int) -> pd.DataFrame:
@@ -259,10 +293,33 @@ def optimize_schedule(scenario: str = "min_risk", max_orders: int = 12,
     }
 
 
-def compare_scenarios(max_orders: int = 12) -> dict:
-    """Run all three scenarios and return their KPI trade-off (satisfies the >=3 scenarios DoD)."""
+def compare_scenarios(max_orders: int = 12, force: bool = False) -> dict:
+    """Run all three scenarios and return their KPI trade-off (satisfies the >=3 scenarios DoD).
+
+    The comparison is persisted (memory + disk, keyed by data version + max_orders) so the Plan
+    view shows it instantly on open instead of re-running OR-Tools three times on every visit.
+    It is only recomputed when the data changes or the caller forces a rebuild (force=True).
+    """
+    from app.cache.semantic_cache import _data_version
+    from app.logging_config import log
+
+    key = (_data_version(), int(max_orders))
+    if not force:
+        if key in _SCEN_CACHE:
+            log.info("SCEN   cache hit (memory, max_orders=%s)", max_orders)
+            return {**_SCEN_CACHE[key], "cached": True}
+        disk = _load_scen_disk(max_orders)
+        if disk is not None:
+            log.info("SCEN   cache hit (disk, max_orders=%s)", max_orders)
+            _SCEN_CACHE[key] = disk
+            return {**disk, "cached": True}
+
+    log.info("SCEN   comparing scenarios (max_orders=%s) - running OR-Tools x3...", max_orders)
     out = {}
     for sc in SCENARIOS:
         res = optimize_schedule(sc, max_orders=max_orders)
         out[sc] = res.get("kpis", {})
-    return {"max_orders": max_orders, "scenarios": out}
+    result = {"max_orders": max_orders, "scenarios": out}
+    _SCEN_CACHE[key] = result
+    _save_scen_disk(max_orders, result)
+    return {**result, "cached": False}

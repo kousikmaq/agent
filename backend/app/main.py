@@ -3,6 +3,7 @@ confirmed action-execute endpoint (human-in-the-loop). CORS is restricted to con
 origins; all request bodies are validated by Pydantic."""
 from __future__ import annotations
 
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -42,8 +43,24 @@ async def lifespan(app: FastAPI):
             log.warning("STARTUP auto-setup skipped: %s: %s", type(exc).__name__, exc)
     log.info("STARTUP ready - serving on the configured port")
     log.info("=" * 60)
+    threading.Thread(target=_prewarm, name="prewarm", daemon=True).start()
     yield
     log.info("SHUTDOWN server stopping")
+
+
+def _prewarm() -> None:
+    """Build the weekly plan + scenario comparison in the background so the Plan view opens
+    instantly on first visit (results are persisted to disk by the functions themselves)."""
+    from app.logging_config import log as _log
+    try:
+        from app.planning import get_weekly_plan
+        from app.optimization.scheduler import compare_scenarios
+        _log.info("PREWARM building weekly plan + scenario comparison...")
+        get_weekly_plan()
+        compare_scenarios()
+        _log.info("PREWARM done - Plan view is ready")
+    except Exception as exc:  # noqa: BLE001 - a warm-up failure must never crash the server
+        _log.warning("PREWARM skipped: %s: %s", type(exc).__name__, exc)
 
 
 app = FastAPI(

@@ -49,7 +49,6 @@ export default function Login({ onLogin, lastEmail = "" }) {
 
         <p className="login-note">Access is restricted to <b>@{ALLOWED_DOMAIN}</b> accounts.</p>
       </motion.div>
-      <div className="login-foot">Microsoft Agent Framework · Azure OpenAI</div>
     </div>
   );
 }
