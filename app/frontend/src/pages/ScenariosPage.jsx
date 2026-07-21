@@ -3,6 +3,7 @@ import { getOverview, getScenarios } from '../api'
 import WeekBar from '../components/WeekBar'
 import HelpBox from '../components/HelpBox'
 import InfoTip from '../components/InfoTip'
+import RecommendationList from '../components/RecommendationList'
 
 function ScenarioCard({ s, best, onCreate }) {
   const over = s.bottleneck_util > 100
@@ -96,6 +97,14 @@ export default function ScenariosPage({ week, setWeek, navigate }) {
       {data && (
         <>
           <div className="info"><b>{data.summary}</b></div>
+
+          {ordered.length > 0 && (
+            <RecommendationList items={[{
+              icon: '⭐', title: `Recommended option: ${ordered[0].name}`,
+              detail: `${ordered[0].outcome} — best on your chosen goal (${metric === 'overload' ? 'fewest overloaded machines' : 'lowest bottleneck load'}).`,
+              cta: 'Create plan →', onClick: () => createPlan(ordered[0]),
+            }]} />
+          )}
 
           <div className="toolbar">
             <span className="t-lbl">Rank “best” by

@@ -3,6 +3,7 @@ import { getOverview, getPriority } from '../api'
 import WeekBar from '../components/WeekBar'
 import HelpBox from '../components/HelpBox'
 import InfoTip from '../components/InfoTip'
+import RecommendationList from '../components/RecommendationList'
 
 function ScoreBar({ score }) {
   const color = score >= 80 ? '#c0392b' : score >= 55 ? '#e08a2e' : '#2e7d46'
@@ -90,6 +91,30 @@ export default function PriorityPage({ week, setWeek, navigate }) {
               ? `${atRisk} are at risk (not enough time for the work) — run the top of the list first.`
               : 'None are at risk this week.'}
           </div>
+
+          {(() => {
+            const risky = data.orders.filter(o => o.at_risk)
+            const tierA = risky.filter(o => o.tier === 'A')
+            const recs = []
+            if (risky.length) {
+              recs.push({
+                icon: '⚠', title: `Run the ${risky.length} at-risk order(s) first`,
+                detail: `Start with ${risky.slice(0, 3).map(o => o.order_id).join(', ')}${risky.length > 3 ? '…' : ''} — critical ratio below 1 means time is already too tight.`,
+                cta: 'Why at risk →', onClick: () => navigate('risk', week),
+              })
+              if (tierA.length) recs.push({
+                icon: '⭐', title: `Protect ${tierA.length} key (Tier A) customer order(s)`,
+                detail: `${tierA.slice(0, 3).map(o => o.order_id).join(', ')} are high-tier and at risk — expedite or add capacity.`,
+                cta: 'Rebalance →', onClick: () => navigate('allocation', week),
+              })
+            } else {
+              recs.push({
+                icon: '✅', title: 'No orders at risk — follow the ranked list top-down',
+                detail: `Run #1 (${data.orders[0] ? data.orders[0].order_id : '—'}) first and work down by urgency.`,
+              })
+            }
+            return <RecommendationList items={recs} />
+          })()}
 
           <div className="toolbar">
             <span className="t-lbl">Show</span>

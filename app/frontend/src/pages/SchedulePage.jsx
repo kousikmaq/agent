@@ -4,6 +4,7 @@ import GanttChart from '../components/GanttChart'
 import WeekBar from '../components/WeekBar'
 import HelpBox from '../components/HelpBox'
 import InfoTip from '../components/InfoTip'
+import RecommendationList from '../components/RecommendationList'
 
 const STEPS = [
   'Reading routings & due dates…',
@@ -129,6 +130,25 @@ export default function SchedulePage({ week, setWeek, navigate }) {
             ? <div className="info">No orders due this week, so there is nothing to schedule. Pick another week above.</div>
             : <GanttChart plan={plan} animate={fresh} highlight={highlight} onSelectOrder={setHighlight} />}
 
+          {plan.ops.length > 0 && (() => {
+            const busy = {}
+            plan.ops.forEach(o => { busy[o.work_center] = (busy[o.work_center] || 0) + o.duration_min })
+            const top = Object.entries(busy).sort((a, b) => b[1] - a[1])[0]
+            const topWc = top[0], topH = Math.round(top[1] / 60 * 10) / 10
+            const recs = [{
+              icon: '⚖', title: `Busiest machine in this plan: ${topWc} (${topH}h of work)`,
+              detail: `It drives the ${plan.makespan_hours}h makespan. Offloading some of its operations to a backup would finish sooner.`,
+              cta: 'Rebalance →', onClick: () => navigate('allocation', week),
+            }, {
+              icon: '▶', title: 'Release orders in the sequence shown',
+              detail: `Following this order finishes all ${plan.orders_scheduled} scheduled orders in ${plan.makespan_hours}h without any machine clash.`,
+            }]
+            if (plan.status !== 'OPTIMAL') recs.push({
+              icon: '⏱', title: 'Solver stopped at a feasible (not proven-optimal) plan',
+              detail: 'Reduce the number of orders, or accept this schedule — it is valid and respects every constraint.',
+            })
+            return <RecommendationList items={recs} />
+          })()}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn-ghost" onClick={() => navigate('priority', week)}>← See which orders are most urgent</button>
             <button className="btn-ghost" onClick={() => navigate('capacity', week)}>Check capacity for this week</button>

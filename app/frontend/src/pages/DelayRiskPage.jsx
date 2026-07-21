@@ -3,6 +3,7 @@ import { getOverview, getRisk } from '../api'
 import WeekBar from '../components/WeekBar'
 import HelpBox from '../components/HelpBox'
 import InfoTip from '../components/InfoTip'
+import RecommendationList from '../components/RecommendationList'
 
 function Stat({ label, value, cls, sub, tip }) {
   return (
@@ -69,6 +70,24 @@ export default function DelayRiskPage({ week, setWeek, navigate }) {
           <div className={`info ${data.at_risk_count ? 'amber' : ''}`}>
             <b>{data.summary}</b>
           </div>
+
+          {(() => {
+            const recs = []
+            if (data.shortages && data.shortages.length) recs.push({
+              icon: '📦', title: `Expedite ${data.shortages.length} short component(s)`,
+              detail: `Chase purchasing on ${data.shortages.slice(0, 3).map(s => s.component_name).join(', ')}${data.shortages.length > 3 ? '…' : ''} — they are blocking material-risk orders.`,
+            })
+            if (data.capacity_risk_count) recs.push({
+              icon: '⚖', title: `Add capacity for ${data.capacity_risk_count} capacity-risk order(s)`,
+              detail: 'Not enough machine time before the due date — rebalance to a backup, add a shift, or re-sequence.',
+              cta: 'Rebalance →', onClick: () => navigate('allocation', week),
+            })
+            if (!data.at_risk_count) recs.push({
+              icon: '✅', title: 'No orders at risk this week — no action needed',
+              detail: 'Materials are covered and there is enough capacity before every due date.',
+            })
+            return <RecommendationList items={recs} />
+          })()}
 
           <div className="grid cards3">
             <Stat label="Orders at risk" value={data.at_risk_count}

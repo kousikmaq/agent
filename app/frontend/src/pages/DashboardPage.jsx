@@ -5,6 +5,7 @@ import HeatmapCard from '../components/HeatmapCard'
 import FeatureList from '../components/FeatureList'
 import HelpBox from '../components/HelpBox'
 import InfoTip from '../components/InfoTip'
+import RecommendationList from '../components/RecommendationList'
 
 function Stat({ label, value, cls, sub, tip, onClick }) {
   return (
@@ -16,7 +17,7 @@ function Stat({ label, value, cls, sub, tip, onClick }) {
   )
 }
 
-export default function DashboardPage({ onSelectWeek }) {
+export default function DashboardPage({ onSelectWeek, navigate }) {
   const [ov, setOv] = useState(null)
   const [hm, setHm] = useState(null)
   const [ds, setDs] = useState(null)
@@ -40,6 +41,33 @@ export default function DashboardPage({ onSelectWeek }) {
   const avgPeak = Math.round(ov.weeks.reduce((s, w) => s + w.bottleneck_util, 0) / ov.weeks.length)
   const curOver = current && current.status === 'OVERLOADED'
   const curTight = current && current.status === 'TIGHT'
+
+  // recommendations derived from the real overview numbers
+  const recs = []
+  if (ov.overloaded_weeks > 0) {
+    recs.push({
+      icon: '⚠', title: `Tackle the busiest week first — ${peak.week_start} (${peak.bottleneck_wc} at ${peak.bottleneck_util}%)`,
+      detail: 'This is the single most overloaded machine-week. Rebalance it or add capacity before it slips.',
+      cta: 'Open week →', onClick: () => onSelectWeek(peak.week_start),
+    })
+    recs.push({
+      icon: '⚖', title: `Rebalance machines on the ${ov.overloaded_weeks} overloaded week(s)`,
+      detail: 'Move work from overloaded machines onto qualified idle backups.',
+      cta: 'Reallocate →', onClick: () => navigate('allocation', peak.week_start),
+    })
+  } else {
+    recs.push({
+      icon: '✅', title: 'No overloaded weeks — the plan is comfortable',
+      detail: `Average weekly peak is ${avgPeak}%. There is headroom to pull work forward or absorb new orders.`,
+    })
+  }
+  if (curOver || curTight) {
+    recs.push({
+      icon: '🕐', title: `This week is ${curOver ? 'overloaded' : 'running tight'} (${current.bottleneck_wc} at ${current.bottleneck_util}%)`,
+      detail: 'Check which orders are most urgent and whether any are at risk.',
+      cta: 'Prioritise →', onClick: () => navigate('priority', current.week_start),
+    })
+  }
 
   return (
     <>
@@ -98,6 +126,9 @@ export default function DashboardPage({ onSelectWeek }) {
         <Stat label="Machines" value={ds.tables.work_centers} cls="navy" sub="across departments"
               tip="Work centres (machines/cells) available to do the work." />
       </div>
+
+      <h2 className="section-title">Recommended actions</h2>
+      <RecommendationList title="What to do next" items={recs} />
 
       <h2 className="section-title">Capacity across all weeks <InfoTip text="Each bar is a week; height is its busiest machine's load. Red bars are overloaded. Click a bar to drill in." /></h2>
       <WeeklyOverviewChart weeks={ov.weeks} onSelectWeek={onSelectWeek} />
