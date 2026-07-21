@@ -20,11 +20,11 @@ export const getWeeks = () => get('/api/weeks')
 export const getDatasetSummary = () => get('/api/dataset/summary')
 export const getFeatures = () => get('/api/features')
 
-export async function askAgent(question) {
+export async function askAgent(question, context) {
   const res = await fetch(`${BASE}/api/agent/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question })
+    body: JSON.stringify({ question, context })
   })
   if (!res.ok) throw new Error(`ask -> ${res.status}`)
   return res.json()

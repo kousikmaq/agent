@@ -3,7 +3,7 @@ Data shapes (Pydantic models) shared by the API and the services.
 """
 from __future__ import annotations
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ----------------------------- capacity (per week) -----------------------------
@@ -272,7 +272,10 @@ class FeatureStatus(BaseModel):
 
 
 class AgentAsk(BaseModel):
-    question: str
+    # Bounded input: rejects empty and oversized questions at the API boundary.
+    question: str = Field(min_length=1, max_length=500)
+    # Optional current tab, used only to bias which tool the copilot reaches for.
+    context: Optional[str] = Field(default=None, max_length=40)
 
 
 class AgentReply(BaseModel):

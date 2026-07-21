@@ -34,7 +34,7 @@ export default function App() {
           {page === 'scenarios' && <ScenariosPage week={week} setWeek={setWeek} navigate={navigate} />}
         </ErrorBoundary>
       </main>
-      <AssistantWidget />
+      <AssistantWidget page={page} />
     </div>
   )
 }

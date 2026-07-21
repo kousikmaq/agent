@@ -190,5 +190,5 @@ def feature_detail(key: str):
 async def agent_ask(body: AgentAsk):
     """Ask the planning copilot a question in plain language."""
     log.info("POST /api/agent/ask")
-    answer, used_llm = await ask_agent(body.question)
+    answer, used_llm = await ask_agent(body.question, body.context)
     return AgentReply(answer=answer, used_llm=used_llm)
