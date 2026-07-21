@@ -17,7 +17,9 @@ const STEPS = [
 export default function SchedulePage({ week, setWeek, navigate }) {
   const [weeks, setWeeks] = useState(null)
   const [n, setN] = useState(12)
+  const [appliedN, setAppliedN] = useState(12)
   const [plan, setPlan] = useState(null)
+  const [prevMakespan, setPrevMakespan] = useState(null)
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState(0)
   const [fresh, setFresh] = useState(false)     // triggers gantt fade-in animation
@@ -39,11 +41,12 @@ export default function SchedulePage({ week, setWeek, navigate }) {
 
   function optimize() {
     if (!week || busy) return
+    setPrevMakespan(plan ? plan.makespan_hours : null)
     setBusy(true); setPlan(null); setHighlight(null); setStep(0)
     // animate the solver steps while we wait
     stepTimer.current = setInterval(() => setStep(s => Math.min(s + 1, STEPS.length - 1)), 380)
     getSchedule(week, n)
-      .then(p => { setPlan(p); setFresh(true); setTimeout(() => setFresh(false), 900) })
+      .then(p => { setPlan(p); setAppliedN(n); setFresh(true); setTimeout(() => setFresh(false), 900) })
       .catch(e => setErr(String(e)))
       .finally(() => { clearInterval(stepTimer.current); setBusy(false) })
   }
@@ -87,10 +90,17 @@ export default function SchedulePage({ week, setWeek, navigate }) {
               onChange={e => setN(Number(e.target.value))} />
             <span className="cv">{n}</span>
           </label>
-          <button className="btn-primary" onClick={optimize} disabled={busy}>
+          <button className="btn-primary" onClick={optimize} disabled={busy || (plan && n === appliedN)}>
             {busy ? 'Optimizing…' : '⚙ Optimize schedule'}
           </button>
         </div>
+        {plan && !busy && (
+          <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
+            {n === appliedN
+              ? `This plan is the optimal (shortest) schedule for ${appliedN} orders — re-running with the same scope gives the same result. Move the slider to try a different number of orders.`
+              : `Scope changed to ${n} orders — click Optimize to re-solve (currently showing ${appliedN}).`}
+          </p>
+        )}
       </div>
 
       {busy && (
@@ -115,9 +125,15 @@ export default function SchedulePage({ week, setWeek, navigate }) {
               <div className="sub">solved in {plan.solve_ms} ms</div>
             </div>
             <div className="card stat">
-              <div className="label">Makespan <InfoTip text="Total time from start until the very last operation finishes." /></div>
+              <div className="label">Makespan <InfoTip text="Total time from start until the very last operation finishes. Fewer orders usually means a shorter makespan." /></div>
               <div className="value navy">{plan.makespan_hours} h</div>
-              <div className="sub">objective: {plan.objective}</div>
+              <div className="sub">
+                {prevMakespan != null && prevMakespan !== plan.makespan_hours ? (
+                  <span style={{ color: plan.makespan_hours < prevMakespan ? '#2e7d46' : '#c0392b', fontWeight: 700 }}>
+                    {plan.makespan_hours < prevMakespan ? '▼' : '▲'} {Math.abs(plan.makespan_hours - prevMakespan).toFixed(1)} h vs previous
+                  </span>
+                ) : `objective: ${plan.objective}`}
+              </div>
             </div>
             <div className="card stat">
               <div className="label">Orders scheduled</div>
@@ -129,6 +145,47 @@ export default function SchedulePage({ week, setWeek, navigate }) {
           {plan.ops.length === 0
             ? <div className="info">No orders due this week, so there is nothing to schedule. Pick another week above.</div>
             : <GanttChart plan={plan} animate={fresh} highlight={highlight} onSelectOrder={setHighlight} />}
+
+          {highlight && plan.ops.length > 0 && (() => {
+            const ops = plan.ops.filter(o => o.order_id === highlight)
+              .sort((a, b) => a.op_seq - b.op_seq || a.start_min - b.start_min)
+            if (!ops.length) return null
+            const h = m => (Math.round(m / 60 * 10) / 10)
+            const start = Math.min(...ops.map(o => o.start_min))
+            const end = Math.max(...ops.map(o => o.end_min))
+            const work = ops.reduce((s, o) => s + o.duration_min, 0)
+            return (
+              <div className="card" style={{ borderColor: '#1b3a5e', boxShadow: '0 0 0 2px #e8f0fa' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                  <h3 style={{ margin: 0 }}>Order {highlight} — {ops[0].item_name}</h3>
+                  <button className="chipbtn on" onClick={() => setHighlight(null)}>Clear selection ✕</button>
+                </div>
+                <div className="dp-grid" style={{ marginTop: 8 }}>
+                  <div className="dp-cell"><div className="k">Operations</div><div className="v">{ops.length}</div></div>
+                  <div className="dp-cell"><div className="k">Starts at</div><div className="v">{h(start)} h</div></div>
+                  <div className="dp-cell"><div className="k">Finishes at</div><div className="v">{h(end)} h</div></div>
+                  <div className="dp-cell"><div className="k">Machine work</div><div className="v">{h(work)} h</div></div>
+                </div>
+                <table className="tbl" style={{ marginTop: 12 }}>
+                  <thead><tr><th>Step</th><th>Machine</th><th>Start</th><th>End</th><th>Duration</th></tr></thead>
+                  <tbody>
+                    {ops.map((o, i) => (
+                      <tr key={i}>
+                        <td>#{o.op_seq}</td>
+                        <td>{o.work_center}</td>
+                        <td>{h(o.start_min)} h</td>
+                        <td>{h(o.end_min)} h</td>
+                        <td>{h(o.duration_min)} h</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="muted" style={{ marginTop: 8 }}>
+                  This order flows through {ops.length} machine{ops.length > 1 ? 's' : ''} in routing order. Gaps between steps are waiting time while other jobs use the next machine.
+                </p>
+              </div>
+            )
+          })()}
 
           {plan.ops.length > 0 && (() => {
             const busy = {}

@@ -131,7 +131,8 @@ export default function PriorityPage({ week, setWeek, navigate }) {
             <table className="tbl">
               <thead>
                 <tr>
-                  <th>#</th><th>Order</th><th>Valve</th><th>Cust</th>
+                  <th>#</th><th>Order</th><th>Valve</th>
+                  <th>Customer<InfoTip text="Customer importance tier: A = most important, B = mid, C = least. Higher tiers are weighted up in the urgency score." /></th>
                   <th className="sortable" onClick={() => setSort('qty')}>Qty<Arrow col="qty" /></th>
                   <th className="sortable" onClick={() => setSort('due')}>Due in<Arrow col="due" /></th>
                   <th>Work</th>

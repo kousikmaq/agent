@@ -78,7 +78,6 @@ export default function CapacityPage({ week, setWeek, navigate }) {
   if (!weeks) return <div className="loading">Loading…</div>
 
   const bn = load && load.bottleneck
-  const bnOver = bn && bn.utilization_pct > 100
   const rows = load ? [...load.resources] : []
   const shown = onlyBusy ? rows.filter(r => r.utilization_pct >= 85) : rows
 
@@ -105,27 +104,41 @@ export default function CapacityPage({ week, setWeek, navigate }) {
 
       {load && (
         <>
-          {/* the headline: bottleneck detection, made obvious */}
-          {bn ? (
-            <div className={`callout ${bnOver ? 'red' : 'green'}`}>
-              <span className="co-ico">{bnOver ? '⛔' : '✅'}</span>
-              <div>
-                <div className="co-t">
-                  Bottleneck: {bn.work_center}
-                  <InfoTip text="The bottleneck is the most heavily loaded machine this week. It caps how much the factory can finish, so fixing it has the biggest payoff." />
-                </div>
-                <div className="co-d">{bn.message}</div>
-              </div>
-              <div className="co-metric">
-                <div className="m-val" style={{ color: bnOver ? '#c0392b' : '#2e7d46' }}>{bn.utilization_pct}%</div>
-                <div className="m-lbl">{bnOver ? `${bn.overload_hours}h over capacity` : 'within capacity'}</div>
-              </div>
-            </div>
-          ) : (
+          {/* the headline: is there a bottleneck this week? made unambiguous */}
+          {!bn ? (
             <div className="callout green"><span className="co-ico">✅</span>
               <div><div className="co-t">No orders due this week</div><div className="co-d">Nothing to schedule.</div></div>
             </div>
-          )}
+          ) : (() => {
+            const tier = bn.utilization_pct > 100 ? 'over' : bn.utilization_pct >= 85 ? 'tight' : 'clear'
+            const cfg = {
+              over: { cls: 'red', ico: '⛔', title: `Bottleneck present — ${bn.work_center}`,
+                      desc: `${bn.work_center} is over capacity by ${bn.overload_hours}h. It caps this week's output, so act on it first.`,
+                      color: '#c0392b', lbl: `${bn.overload_hours}h over capacity` },
+              tight: { cls: '', ico: '⚠️', title: `Near-bottleneck — ${bn.work_center} is tight`,
+                       desc: `${bn.work_center} is close to full. No overload yet, but little slack — watch it.`,
+                       color: '#b47a1e', lbl: 'running tight' },
+              clear: { cls: 'green', ico: '✅', title: 'No bottleneck this week',
+                       desc: `Every machine has spare capacity. Busiest is ${bn.work_center} at ${bn.utilization_pct}%.`,
+                       color: '#2e7d46', lbl: 'within capacity' },
+            }[tier]
+            return (
+              <div className={`callout ${cfg.cls}`} style={tier === 'tight' ? { background: '#fcf3e3', borderColor: '#efe0c0' } : undefined}>
+                <span className="co-ico">{cfg.ico}</span>
+                <div>
+                  <div className="co-t">
+                    {cfg.title}
+                    <InfoTip text="A bottleneck is a machine loaded at or over 100% that limits the whole week's output. If the busiest machine has spare capacity, there is no bottleneck this week." />
+                  </div>
+                  <div className="co-d">{cfg.desc}</div>
+                </div>
+                <div className="co-metric">
+                  <div className="m-val" style={{ color: cfg.color }}>{bn.utilization_pct}%</div>
+                  <div className="m-lbl">{cfg.lbl}</div>
+                </div>
+              </div>
+            )
+          })()}
 
           {load.resources.length > 0 && (
             <div className="card">

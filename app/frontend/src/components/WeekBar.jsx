@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import InfoTip from './InfoTip'
+import { weekRange } from '../weekUtils'
 
 const statusClass = s => (s === 'OVERLOADED' ? 'over' : s === 'TIGHT' ? 'tight' : 'ok')
 const statusWord = s => (s === 'OVERLOADED' ? 'overloaded' : s === 'TIGHT' ? 'running tight' : 'comfortable')
@@ -53,7 +54,7 @@ export default function WeekBar({ weeks, week, setWeek }) {
 
       {sel && (
         <div className="weekbar-cur">
-          Showing <b>{relLabel(idx)}</b> · week of {week} ·
+          Showing <b>{relLabel(idx)}</b> · <b>{weekRange(week)}</b> ·
           {' '}busiest machine at <b className={sel.bottleneck_util > 100 ? 'txt-red' : ''}>{sel.bottleneck_util}%</b>
           {' '}({statusWord(sel.status)})
         </div>

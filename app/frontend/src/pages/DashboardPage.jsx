@@ -6,6 +6,8 @@ import FeatureList from '../components/FeatureList'
 import HelpBox from '../components/HelpBox'
 import InfoTip from '../components/InfoTip'
 import RecommendationList from '../components/RecommendationList'
+import WeekBar, { relLabel } from '../components/WeekBar'
+import { weekRange } from '../weekUtils'
 
 function Stat({ label, value, cls, sub, tip, onClick }) {
   return (
@@ -22,6 +24,7 @@ export default function DashboardPage({ onSelectWeek, navigate }) {
   const [hm, setHm] = useState(null)
   const [ds, setDs] = useState(null)
   const [feat, setFeat] = useState(null)
+  const [selWeek, setSelWeek] = useState(null)
   const [err, setErr] = useState(null)
 
   useEffect(() => {
@@ -35,12 +38,15 @@ export default function DashboardPage({ onSelectWeek, navigate }) {
 
   const sorted = [...ov.weeks].sort((a, b) => a.week_start.localeCompare(b.week_start))
   const current = sorted[0]
+  const activeWeek = selWeek || current.week_start
+  const selIdx = Math.max(0, sorted.findIndex(w => w.week_start === activeWeek))
+  const sel = sorted[selIdx] || current
   const attention = ov.weeks.filter(w => w.status !== 'OK')
   const comfy = ov.weeks.length - attention.length
   const peak = [...ov.weeks].sort((a, b) => b.bottleneck_util - a.bottleneck_util)[0]
   const avgPeak = Math.round(ov.weeks.reduce((s, w) => s + w.bottleneck_util, 0) / ov.weeks.length)
-  const curOver = current && current.status === 'OVERLOADED'
-  const curTight = current && current.status === 'TIGHT'
+  const selOver = sel && sel.status === 'OVERLOADED'
+  const selTight = sel && sel.status === 'TIGHT'
 
   // recommendations derived from the real overview numbers
   const recs = []
@@ -61,11 +67,11 @@ export default function DashboardPage({ onSelectWeek, navigate }) {
       detail: `Average weekly peak is ${avgPeak}%. There is headroom to pull work forward or absorb new orders.`,
     })
   }
-  if (curOver || curTight) {
+  if (selOver || selTight) {
     recs.push({
-      icon: '🕐', title: `This week is ${curOver ? 'overloaded' : 'running tight'} (${current.bottleneck_wc} at ${current.bottleneck_util}%)`,
+      icon: '🕐', title: `${relLabel(selIdx)} is ${selOver ? 'overloaded' : 'running tight'} (${sel.bottleneck_wc} at ${sel.bottleneck_util}%)`,
       detail: 'Check which orders are most urgent and whether any are at risk.',
-      cta: 'Prioritise →', onClick: () => navigate('priority', current.week_start),
+      cta: 'Prioritise →', onClick: () => navigate('priority', sel.week_start),
     })
   }
 
@@ -85,20 +91,22 @@ export default function DashboardPage({ onSelectWeek, navigate }) {
         </ul>
       </HelpBox>
 
-      {/* This week at a glance */}
-      {current && (
-        <div className={`callout ${curOver ? 'red' : curTight ? '' : 'green'}`} style={curTight ? { background: '#fcf3e3', borderColor: '#efe0c0' } : undefined}>
-          <span className="co-ico">{curOver ? '⛔' : curTight ? '⚠️' : '✅'}</span>
+      {/* Week filter + selected-week at a glance */}
+      <WeekBar weeks={ov.weeks} week={activeWeek} setWeek={setSelWeek} />
+
+      {sel && (
+        <div className={`callout ${selOver ? 'red' : selTight ? '' : 'green'}`} style={selTight ? { background: '#fcf3e3', borderColor: '#efe0c0' } : undefined}>
+          <span className="co-ico">{selOver ? '⛔' : selTight ? '⚠️' : '✅'}</span>
           <div>
-            <div className="co-t">This week (of {current.week_start}) — {curOver ? 'overloaded' : curTight ? 'running tight' : 'comfortable'}</div>
+            <div className="co-t">{relLabel(selIdx)} ({weekRange(sel.week_start)}) — {selOver ? 'overloaded' : selTight ? 'running tight' : 'comfortable'}</div>
             <div className="co-d">
-              {current.orders} orders due · busiest machine {current.bottleneck_wc} at {current.bottleneck_util}%.{' '}
-              <span style={{ color: '#0f766e', cursor: 'pointer', fontWeight: 600 }} onClick={() => onSelectWeek(current.week_start)}>Open this week →</span>
+              {sel.orders} orders due · busiest machine {sel.bottleneck_wc} at {sel.bottleneck_util}%.{' '}
+              <span style={{ color: '#0f766e', cursor: 'pointer', fontWeight: 600 }} onClick={() => onSelectWeek(sel.week_start)}>Open this week →</span>
             </div>
           </div>
           <div className="co-metric">
-            <div className="m-val" style={{ color: curOver ? '#c0392b' : curTight ? '#b47a1e' : '#2e7d46' }}>{current.bottleneck_util}%</div>
-            <div className="m-lbl">this week's peak</div>
+            <div className="m-val" style={{ color: selOver ? '#c0392b' : selTight ? '#b47a1e' : '#2e7d46' }}>{sel.bottleneck_util}%</div>
+            <div className="m-lbl">{relLabel(selIdx).toLowerCase()} peak</div>
           </div>
         </div>
       )}
