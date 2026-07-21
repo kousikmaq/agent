@@ -1,0 +1,15 @@
+# Backend dependencies for the Production Planning Agent
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+python-dotenv==1.0.1
+
+# Schedule optimization (CP-SAT solver)
+ortools==9.15.6755
+
+# Microsoft Agent Framework (MAF) + Azure OpenAI.
+# The app runs WITHOUT these (graceful fallback); install to enable the LLM copilot.
+agent-framework==1.0.0b251001
+
+# Dev / tests
+pytest==8.3.4

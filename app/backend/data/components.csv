@@ -1,0 +1,46 @@
+component_id,component_name,category,material,unit_cost_usd,lead_time_days,supplier
+CMP-001,Body (Bronze),Casting,Bronze,159.09,10,Precision Parts Inc
+CMP-002,Body (Duplex),Casting,Duplex,68.31,3,Precision Parts Inc
+CMP-003,Body (Brass),Casting,Brass,85.57,14,NordForge
+CMP-004,Bonnet (Duplex),Casting,Duplex,225.54,3,Precision Parts Inc
+CMP-005,Bonnet (StainlessSteel),Casting,StainlessSteel,44.5,7,Ferro Alloys Ltd
+CMP-006,Bonnet (CastIron),Casting,CastIron,27.8,10,Precision Parts Inc
+CMP-007,Disc (Duplex),Machined,Duplex,146.28,14,Ferro Alloys Ltd
+CMP-008,Disc (CastIron),Machined,CastIron,93.68,14,SealTech Co
+CMP-009,Disc (CarbonSteel),Machined,CarbonSteel,62.62,21,NordForge
+CMP-010,Ball (Brass),Machined,Brass,88.68,3,Precision Parts Inc
+CMP-011,Ball (StainlessSteel),Machined,StainlessSteel,150.31,21,Ferro Alloys Ltd
+CMP-012,Ball (Bronze),Machined,Bronze,173.3,7,Delta Hardware
+CMP-013,Gate (CastIron),Machined,CastIron,97.77,7,Delta Hardware
+CMP-014,Gate (CarbonSteel),Machined,CarbonSteel,32.29,10,NordForge
+CMP-015,Gate (Duplex),Machined,Duplex,163.2,5,Delta Hardware
+CMP-016,Stem (StainlessSteel),Machined,StainlessSteel,132.41,3,Precision Parts Inc
+CMP-017,Stem (CastIron),Machined,CastIron,70.29,10,Delta Hardware
+CMP-018,Stem (CarbonSteel),Machined,CarbonSteel,146.39,7,NordForge
+CMP-019,SeatRing (CarbonSteel),Sealing,CarbonSteel,123.66,30,SealTech Co
+CMP-020,SeatRing (Duplex),Sealing,Duplex,158.81,7,Delta Hardware
+CMP-021,SeatRing (Bronze),Sealing,Bronze,160.0,14,Precision Parts Inc
+CMP-022,Gasket (Brass),Sealing,Brass,55.46,5,SealTech Co
+CMP-023,Gasket (Bronze),Sealing,Bronze,7.81,5,NordForge
+CMP-024,Gasket (CastIron),Sealing,CastIron,147.48,30,Ferro Alloys Ltd
+CMP-025,ORing (CarbonSteel),Sealing,CarbonSteel,172.97,10,NordForge
+CMP-026,ORing (Duplex),Sealing,Duplex,97.12,5,Ferro Alloys Ltd
+CMP-027,ORing (Bronze),Sealing,Bronze,214.45,30,Ferro Alloys Ltd
+CMP-028,Spring (CarbonSteel),Hardware,CarbonSteel,193.38,21,Delta Hardware
+CMP-029,Spring (Bronze),Hardware,Bronze,112.56,14,SealTech Co
+CMP-030,Spring (StainlessSteel),Hardware,StainlessSteel,220.36,3,NordForge
+CMP-031,Handwheel (Bronze),Hardware,Bronze,228.11,10,Delta Hardware
+CMP-032,Handwheel (CarbonSteel),Hardware,CarbonSteel,195.97,14,NordForge
+CMP-033,Handwheel (CastIron),Hardware,CastIron,199.68,14,NordForge
+CMP-034,Actuator (Bronze),Hardware,Bronze,63.69,5,Precision Parts Inc
+CMP-035,Actuator (CarbonSteel),Hardware,CarbonSteel,184.26,14,NordForge
+CMP-036,Actuator (StainlessSteel),Hardware,StainlessSteel,151.17,7,NordForge
+CMP-037,FastenerSet (Brass),Hardware,Brass,66.67,7,Delta Hardware
+CMP-038,FastenerSet (CastIron),Hardware,CastIron,21.18,5,SealTech Co
+CMP-039,FastenerSet (Bronze),Hardware,Bronze,93.16,5,SealTech Co
+CMP-040,Nameplate (Brass),Hardware,Brass,80.75,10,NordForge
+CMP-041,Nameplate (CarbonSteel),Hardware,CarbonSteel,16.82,30,NordForge
+CMP-042,Nameplate (StainlessSteel),Hardware,StainlessSteel,94.7,30,Delta Hardware
+CMP-043,PackingGland (Duplex),Sealing,Duplex,115.52,7,Precision Parts Inc
+CMP-044,PackingGland (Brass),Sealing,Brass,181.33,30,NordForge
+CMP-045,PackingGland (CarbonSteel),Sealing,CarbonSteel,130.1,21,Delta Hardware

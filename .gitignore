@@ -1,0 +1,25 @@
+# ---- secrets (NEVER commit) ----
+**/.env
+*.pem
+*.key
+
+# ---- python ----
+**/__pycache__/
+*.py[cod]
+app/backend/.venv/
+app/backend/logs/
+.pytest_cache/
+
+# ---- node / frontend ----
+app/frontend/node_modules/
+app/frontend/dist/
+
+# ---- tooling / artifacts ----
+.playwright-mcp/
+.vite/
+
+# ---- captures / generated docs (not source) ----
+*.png
+*.docx
+~$*
+others/

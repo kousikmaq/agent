@@ -1,0 +1,10 @@
+work_center_id,name,department,hours_per_shift,shifts_per_day,days_per_week,weekly_capacity_hours
+CAST-01,Body Casting,Foundry,8,3,5,120
+CNC-01,CNC Machining 1,Machining,8,3,5,120
+CNC-02,CNC Machining 2,Machining,8,3,5,120
+CNC-03,CNC Machining 3,Machining,8,3,5,120
+GRIND-01,Seat Grinding,Finishing,8,2,5,80
+ASSY-01,Assembly Line 1,Assembly,8,3,5,120
+ASSY-02,Assembly Line 2,Assembly,8,3,5,120
+TEST-01,Pressure Testing,Quality,8,3,5,120
+PACK-01,Packing,Logistics,8,2,5,80
