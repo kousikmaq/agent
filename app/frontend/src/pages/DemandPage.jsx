@@ -3,11 +3,13 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, Cell
 } from 'recharts'
 import { getDemand } from '../api'
+import HelpBox from '../components/HelpBox'
+import InfoTip from '../components/InfoTip'
 
-function Stat({ label, value, cls, sub }) {
+function Stat({ label, value, cls, sub, tip }) {
   return (
     <div className="card stat">
-      <div className="label">{label}</div>
+      <div className="label">{label}{tip && <InfoTip text={tip} />}</div>
       <div className={`value ${cls || ''}`}>{value}</div>
       {sub && <div className="sub">{sub}</div>}
     </div>
@@ -22,7 +24,7 @@ export default function DemandPage() {
     getDemand().then(setData).catch(e => setErr(String(e)))
   }, [])
 
-  if (err) return <div className="err">Cannot reach the backend ({err}). Start it on port 8001.</div>
+  if (err) return <div className="err">Cannot reach the backend ({err}). Start it on port 8000.</div>
   if (!data) return <div className="loading">Checking the order book…</div>
 
   const verdictClass = !data.overall_feasible ? 'amber' : (data.overloaded_weeks ? 'amber' : '')
@@ -37,13 +39,22 @@ export default function DemandPage() {
         <p>Can we commit to the whole {data.horizon_weeks}-week order book? Total work required vs total capacity available.</p>
       </div>
 
+      <HelpBox title="New here? Demand vs capacity, explained">
+        <ul>
+          <li>This is the <b>big-picture, whole-horizon</b> check: add up all the work in the order book and compare it to all the capacity over the same {data.horizon_weeks} weeks.</li>
+          <li>If total load is <b>under 100%</b>, the volume fits — any trouble is about <b>weekly peaks</b> (some weeks spike), which the Capacity and Scenarios pages help smooth.</li>
+          <li>If a <b>department</b> is over 100% here, you are structurally short of capacity and need more shifts, machines, or outsourcing.</li>
+        </ul>
+      </HelpBox>
+
       <div className={`info ${verdictClass}`}>
         <b>Verdict:</b> {data.verdict}
       </div>
 
       <div className="grid cards4">
         <Stat label="Total load (horizon)" value={`${data.overall_utilization_pct}%`}
-              cls={data.overall_feasible ? 'green' : 'red'} sub="required ÷ available" />
+              cls={data.overall_feasible ? 'green' : 'red'} sub="required ÷ available"
+              tip="All work required across the horizon divided by all capacity available. Under 100% means the total volume fits." />
         <Stat label="Work required" value={`${data.overall_required_hours.toLocaleString()} h`} cls="navy" />
         <Stat label="Capacity available" value={`${data.overall_available_hours.toLocaleString()} h`} cls="navy" />
         <Stat label="Overloaded weeks" value={data.overloaded_weeks}

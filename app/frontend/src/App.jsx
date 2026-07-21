@@ -16,20 +16,22 @@ export default function App() {
   const [week, setWeek] = useState(null)
 
   function goToWeek(w) { setWeek(w); setPage('capacity') }
+  // Jump to any page, optionally pre-selecting a week (used by "create plan from scenario").
+  function navigate(target, w) { if (w) setWeek(w); setPage(target) }
 
   return (
     <div className="shell">
       <Sidebar page={page} setPage={setPage} />
       <main className="main">
         <ErrorBoundary key={page}>
-          {page === 'dashboard' && <DashboardPage onSelectWeek={goToWeek} />}
-          {page === 'capacity' && <CapacityPage week={week} setWeek={setWeek} />}
-          {page === 'priority' && <PriorityPage week={week} setWeek={setWeek} />}
-          {page === 'allocation' && <AllocationPage week={week} setWeek={setWeek} />}
-          {page === 'schedule' && <SchedulePage week={week} setWeek={setWeek} />}
-          {page === 'risk' && <DelayRiskPage week={week} setWeek={setWeek} />}
-          {page === 'demand' && <DemandPage />}
-          {page === 'scenarios' && <ScenariosPage week={week} setWeek={setWeek} />}
+          {page === 'dashboard' && <DashboardPage onSelectWeek={goToWeek} navigate={navigate} />}
+          {page === 'capacity' && <CapacityPage week={week} setWeek={setWeek} navigate={navigate} />}
+          {page === 'priority' && <PriorityPage week={week} setWeek={setWeek} navigate={navigate} />}
+          {page === 'allocation' && <AllocationPage week={week} setWeek={setWeek} navigate={navigate} />}
+          {page === 'schedule' && <SchedulePage week={week} setWeek={setWeek} navigate={navigate} />}
+          {page === 'risk' && <DelayRiskPage week={week} setWeek={setWeek} navigate={navigate} />}
+          {page === 'demand' && <DemandPage navigate={navigate} />}
+          {page === 'scenarios' && <ScenariosPage week={week} setWeek={setWeek} navigate={navigate} />}
         </ErrorBoundary>
       </main>
       <AssistantWidget />

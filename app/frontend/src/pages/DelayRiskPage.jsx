@@ -1,28 +1,32 @@
 import React, { useEffect, useState } from 'react'
 import { getOverview, getRisk } from '../api'
+import WeekBar from '../components/WeekBar'
+import HelpBox from '../components/HelpBox'
+import InfoTip from '../components/InfoTip'
 
-function Stat({ label, value, cls, sub }) {
+function Stat({ label, value, cls, sub, tip }) {
   return (
     <div className="card stat">
-      <div className="label">{label}</div>
+      <div className="label">{label}{tip && <InfoTip text={tip} />}</div>
       <div className={`value ${cls || ''}`}>{value}</div>
       {sub && <div className="sub">{sub}</div>}
     </div>
   )
 }
 
-export default function DelayRiskPage({ week, setWeek }) {
+export default function DelayRiskPage({ week, setWeek, navigate }) {
   const [weeks, setWeeks] = useState(null)
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
+  const [cause, setCause] = useState('all')   // all | material | capacity
 
   useEffect(() => {
     getOverview()
       .then(ov => {
         setWeeks(ov.weeks)
         if (!week) {
-          const worst = [...ov.weeks].sort((a, b) => b.bottleneck_util - a.bottleneck_util)[0]
-          setWeek(worst.week_start)
+          const current = [...ov.weeks].sort((a, b) => a.week_start.localeCompare(b.week_start))[0]
+          setWeek(current.week_start)
         }
       })
       .catch(e => setErr(String(e)))
@@ -34,28 +38,29 @@ export default function DelayRiskPage({ week, setWeek }) {
     getRisk(week).then(setData).catch(e => setErr(String(e)))
   }, [week])
 
-  if (err) return <div className="err">Cannot reach the backend ({err}). Start it on port 8001.</div>
+  if (err) return <div className="err">Cannot reach the backend ({err}). Start it on port 8000.</div>
   if (!weeks) return <div className="loading">Loading…</div>
 
-  const statusClass = s => (s === 'OVERLOADED' ? 'over' : s === 'TIGHT' ? 'tight' : 'ok')
+  let atRiskOrders = data ? data.orders.filter(o => o.at_risk) : []
+  if (cause === 'material') atRiskOrders = atRiskOrders.filter(o => o.causes.some(c => /material|component|stock|part/i.test(c)))
+  if (cause === 'capacity') atRiskOrders = atRiskOrders.filter(o => o.causes.some(c => /time|capacity|hours|machine/i.test(c)))
 
   return (
     <>
       <div className="pagehead">
         <h1>Delay Risk</h1>
-        <p>Orders likely to be late this week — from missing materials (BOM vs inventory) or tight capacity — each with a fix.</p>
+        <p>Orders likely to be late this week — from missing materials or tight capacity — each with a fix.</p>
       </div>
 
-      <div className="weeks">
-        {weeks.map(w => (
-          <button key={w.week_start}
-            className={`weekchip ${w.week_start === week ? 'active' : ''}`}
-            onClick={() => setWeek(w.week_start)}>
-            <span className={`dot ${statusClass(w.status)}`} />
-            {w.week_start.slice(5)}
-          </button>
-        ))}
-      </div>
+      <HelpBox title="New here? Where delay risk comes from">
+        <ul>
+          <li><b>Material risk</b> — the parts (bill of materials) needed aren't in stock and won't arrive in time.</li>
+          <li><b>Capacity risk</b> — there isn't enough machine time before the due date (critical ratio below 1).</li>
+          <li>Each at-risk order lists the <b>cause</b> and a suggested <b>fix</b> (expedite a part, add a shift, re-sequence, etc.).</li>
+        </ul>
+      </HelpBox>
+
+      <WeekBar weeks={weeks} week={week} setWeek={setWeek} />
 
       {!data && <div className="loading">Checking risk…</div>}
 
@@ -68,22 +73,34 @@ export default function DelayRiskPage({ week, setWeek }) {
           <div className="grid cards3">
             <Stat label="Orders at risk" value={data.at_risk_count}
                   cls={data.at_risk_count ? 'red' : 'green'} sub={`of ${data.orders_considered} this week`} />
-            <Stat label="Material risk" value={data.material_risk_count} cls="amber" sub="missing components" />
-            <Stat label="Capacity risk" value={data.capacity_risk_count} cls="amber" sub="not enough time" />
+            <Stat label="Material risk" value={data.material_risk_count} cls="amber" sub="missing components"
+                  tip="Parts from the bill of materials are short and won't arrive before the order is due." />
+            <Stat label="Capacity risk" value={data.capacity_risk_count} cls="amber" sub="not enough time"
+                  tip="Not enough machine time before the due date (critical ratio below 1)." />
+          </div>
+
+          <div className="toolbar">
+            <span className="t-lbl">Filter by cause</span>
+            <div className="seg">
+              <button className={cause === 'all' ? 'on' : ''} onClick={() => setCause('all')}>All</button>
+              <button className={cause === 'material' ? 'on' : ''} onClick={() => setCause('material')}>Material</button>
+              <button className={cause === 'capacity' ? 'on' : ''} onClick={() => setCause('capacity')}>Capacity</button>
+            </div>
+            <button className="btn-ghost" style={{ marginLeft: 'auto' }} onClick={() => navigate('priority', week)}>See order priorities →</button>
           </div>
 
           <div className="grid two-13">
             <div className="card">
               <h3>At-risk orders</h3>
-              {data.orders.filter(o => o.at_risk).length === 0
-                ? <p className="muted">No orders at risk this week.</p>
+              {atRiskOrders.length === 0
+                ? <p className="muted">No orders at risk for this filter.</p>
                 : (
                   <table className="tbl">
                     <thead>
                       <tr><th>Order</th><th>Valve</th><th>Due</th><th>Why</th><th>Fix</th></tr>
                     </thead>
                     <tbody>
-                      {data.orders.filter(o => o.at_risk).map(o => (
+                      {atRiskOrders.map(o => (
                         <tr key={o.order_id} style={{ background: '#fdf3f2' }}>
                           <td>{o.order_id}</td>
                           <td>{o.item_name}</td>
@@ -98,7 +115,7 @@ export default function DelayRiskPage({ week, setWeek }) {
             </div>
 
             <div className="card">
-              <h3>Short components</h3>
+              <h3>Short components <InfoTip text="Parts needed by this week's orders where demand exceeds what's on hand plus what arrives in time." /></h3>
               {data.shortages.length === 0
                 ? <p className="muted">All materials are covered this week.</p>
                 : data.shortages.map(s => (

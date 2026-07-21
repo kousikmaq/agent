@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { getOverview, getAllocation } from '../api'
+import WeekBar from '../components/WeekBar'
+import HelpBox from '../components/HelpBox'
+import InfoTip from '../components/InfoTip'
 
 function Bar({ pct }) {
   const over = pct > 100
@@ -12,18 +15,19 @@ function Bar({ pct }) {
   )
 }
 
-export default function AllocationPage({ week, setWeek }) {
+export default function AllocationPage({ week, setWeek, navigate }) {
   const [weeks, setWeeks] = useState(null)
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
+  const [openMove, setOpenMove] = useState(null)
 
   useEffect(() => {
     getOverview()
       .then(ov => {
         setWeeks(ov.weeks)
         if (!week) {
-          const worst = [...ov.weeks].sort((a, b) => b.bottleneck_util - a.bottleneck_util)[0]
-          setWeek(worst.week_start)
+          const current = [...ov.weeks].sort((a, b) => a.week_start.localeCompare(b.week_start))[0]
+          setWeek(current.week_start)
         }
       })
       .catch(e => setErr(String(e)))
@@ -31,32 +35,31 @@ export default function AllocationPage({ week, setWeek }) {
 
   useEffect(() => {
     if (!week) return
-    setData(null)
+    setData(null); setOpenMove(null)
     getAllocation(week).then(setData).catch(e => setErr(String(e)))
   }, [week])
 
-  if (err) return <div className="err">Cannot reach the backend ({err}). Start it on port 8001.</div>
+  if (err) return <div className="err">Cannot reach the backend ({err}). Start it on port 8000.</div>
   if (!weeks) return <div className="loading">Loading…</div>
-
-  const statusClass = s => (s === 'OVERLOADED' ? 'over' : s === 'TIGHT' ? 'tight' : 'ok')
 
   return (
     <>
       <div className="pagehead">
         <h1>Resource Allocation</h1>
-        <p>Move work off overloaded machines onto qualified idle backups, and see the before/after balance.</p>
+        <p>Move work off overloaded machines onto qualified idle backups — and see the before/after balance.</p>
       </div>
 
-      <div className="weeks">
-        {weeks.map(w => (
-          <button key={w.week_start}
-            className={`weekchip ${w.week_start === week ? 'active' : ''}`}
-            onClick={() => setWeek(w.week_start)}>
-            <span className={`dot ${statusClass(w.status)}`} />
-            {w.week_start.slice(5)}
-          </button>
-        ))}
-      </div>
+      <HelpBox title="New here? What 'reallocation' means">
+        <ul>
+          <li>Some operations can run on more than one machine (a primary and a <b>backup / alternate</b>).</li>
+          <li>When the primary is overloaded, we shift hours to a backup that still has spare time — <b>without pushing the backup over 100%</b>.</li>
+          <li>The <b>before → after</b> bars show each affected machine's load dropping after the move.</li>
+          <li>If a machine has no backup, reallocation can't help — you'd use overtime, outsourcing, or move orders to another week.</li>
+        </ul>
+        Click any recommended move to see the details.
+      </HelpBox>
+
+      <WeekBar weeks={weeks} week={week} setWeek={setWeek} />
 
       {!data && <div className="loading">Balancing…</div>}
 
@@ -68,13 +71,14 @@ export default function AllocationPage({ week, setWeek }) {
 
           <div className="grid cards3">
             <div className="card stat">
-              <div className="label">Hours moved</div>
+              <div className="label">Hours moved <InfoTip text="Total machine-hours shifted from overloaded machines to their backups." /></div>
               <div className="value navy">{data.hours_moved}</div>
               <div className="sub">to idle backup machines</div>
             </div>
             <div className="card stat">
               <div className="label">Overloads before</div>
               <div className="value red">{data.overloads_before}</div>
+              <div className="sub">machines over 100%</div>
             </div>
             <div className="card stat">
               <div className="label">Overloads after</div>
@@ -85,18 +89,32 @@ export default function AllocationPage({ week, setWeek }) {
 
           <div className="grid two-even">
             <div className="card">
-              <h3>Recommended moves</h3>
+              <h3>Recommended moves <InfoTip text="Each move offloads hours from an overloaded machine to a qualified backup with spare capacity." /></h3>
               {data.moves.length === 0
                 ? <p className="muted">No moves possible — overloaded machines have no alternate, so use overtime, outsourcing or deferral.</p>
-                : data.moves.map((m, i) => (
-                  <div className="rec" key={i}>
-                    <span className="rec-ico">⇄</span>
-                    <div>
-                      <div className="rec-t">{m.from_wc} → {m.to_wc} · {m.hours}h</div>
-                      <div className="rec-d">{m.note}</div>
+                : data.moves.map((m, i) => {
+                  const open = openMove === i
+                  return (
+                    <div key={i}>
+                      <div className="rec" style={{ cursor: 'pointer' }} onClick={() => setOpenMove(open ? null : i)}>
+                        <span className="rec-ico">⇄</span>
+                        <div>
+                          <div className="rec-t">{m.from_wc} → {m.to_wc} · {m.hours}h {open ? '▲' : '▾'}</div>
+                          <div className="rec-d">{m.note}</div>
+                        </div>
+                      </div>
+                      {open && (
+                        <div className="dp-inner">
+                          <div className="dp-grid">
+                            <div className="dp-cell"><div className="k">From (overloaded)</div><div className="v">{m.from_wc}</div></div>
+                            <div className="dp-cell"><div className="k">To (backup)</div><div className="v">{m.to_wc}</div></div>
+                            <div className="dp-cell"><div className="k">Hours moved</div><div className="v">{m.hours} h</div></div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
             </div>
 
             <div className="card">
@@ -112,6 +130,11 @@ export default function AllocationPage({ week, setWeek }) {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button className="btn-ghost" onClick={() => navigate('capacity', week)}>← Back to capacity</button>
+            <button className="btn-ghost" onClick={() => navigate('schedule', week)}>Build a machine schedule →</button>
           </div>
         </>
       )}

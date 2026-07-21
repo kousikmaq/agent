@@ -33,8 +33,8 @@ export default function Sidebar({ page, setPage }) {
         ))}
       </nav>
       <div className="foot">
-        v0.7 · valve-factory demo<br />
-        9 features · full set
+        v0.8 · valve-factory demo<br />
+        9 features · interactive
       </div>
     </aside>
   )

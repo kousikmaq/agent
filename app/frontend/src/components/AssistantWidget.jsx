@@ -3,8 +3,9 @@ import { askAgent } from '../api'
 
 const SAMPLES = [
   'Which week is the most overloaded?',
-  'What is the bottleneck?',
-  'How many weeks are overloaded?'
+  'What is the bottleneck this week?',
+  'How many orders are at risk?',
+  'How should I fix the overloaded week?'
 ]
 
 export default function AssistantWidget() {
@@ -22,7 +23,7 @@ export default function AssistantWidget() {
       const r = await askAgent(text)
       setMsgs(m => [...m, { role: 'bot', text: r.answer, used_llm: r.used_llm }])
     } catch (e) {
-      setMsgs(m => [...m, { role: 'bot', text: 'Could not reach the assistant. Is the backend running on port 8001?' }])
+      setMsgs(m => [...m, { role: 'bot', text: 'Could not reach the assistant. Is the backend running on port 8000?' }])
     } finally {
       setBusy(false)
     }
