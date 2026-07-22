@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Local development orchestration for the backend service.
+# Frontend and future ERP/MES services will be added in later phases.
+# ---------------------------------------------------------------------------
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: production-planner-backend:latest
+    container_name: production-planner-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Override any PPO_* setting here; falls back to defaults in config.py.
+      PPO_ENVIRONMENT: development
+      PPO_LOG_LEVEL: INFO
+      PPO_LOG_JSON: "false"
+    env_file:
+      - ./backend/.env
+    volumes:
+      # Persist generated daily data/outputs on the host across restarts.
+      - ./backend/datasets:/app/datasets
+      - ./backend/outputs:/app/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/api/v1/health').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

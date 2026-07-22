@@ -1,0 +1,35 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Environment / secrets ---
+.env
+*.local
+
+# --- Generated data & outputs (kept out of VCS; regenerated per day) ---
+backend/datasets/*/
+backend/outputs/*/
+!backend/datasets/.gitkeep
+!backend/outputs/.gitkeep
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- Node / frontend ---
+node_modules/
+dist/

@@ -1,0 +1,2 @@
+# Placeholder so the datasets directory exists in version control.
+# Actual daily snapshots (datasets/YYYY-MM-DD/) are generated and git-ignored.

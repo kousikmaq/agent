@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Production Planning & Schedule Optimization Agent - Backend dependencies
+# ---------------------------------------------------------------------------
+# Pinned to compatible ranges for reproducible, production-grade builds.
+
+# --- Web framework / ASGI ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# --- Configuration & validation ---
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# --- Optimization engine (used from Phase: Optimization onward) ---
+ortools==9.11.4210
+
+# --- Data handling (used from Phase: Ingestion/Simulator onward) ---
+pandas==2.2.3
+
+# --- Azure OpenAI chat assistant (used from Phase: Explanation/Chat onward) ---
+openai==1.59.6
+
+# --- Azure AD auth for Azure OpenAI (token auth, no API keys) ---
+azure-identity==1.19.0
+
+# --- MAF orchestration layer (Microsoft Agent Framework; used by the agents
+#     package. Deterministic agents run without it; the Explanation agent uses
+#     it in a later phase.) ---
+agent-framework==1.11.0
+
+# --- Utilities ---
+python-json-logger==3.2.1
+
+# --- Testing / quality (dev) ---
+pytest==8.3.4
+pytest-asyncio==0.25.2
+httpx==0.28.1
