@@ -32,7 +32,7 @@ interface QuickAction {
 /** Derive agentic follow-up actions from an assistant answer. */
 function suggestedActions(text: string, date: string): QuickAction[] {
   const actions: QuickAction[] = [];
-  if (/\brisk|late|bottleneck|overdue|delay/i.test(text)) {
+  if (/\b(?:risk|late|bottleneck|overdue|delay)/i.test(text)) {
     actions.push({
       key: "email-risks",
       label: "✉ Email risk summary",

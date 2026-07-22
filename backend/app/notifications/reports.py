@@ -132,7 +132,7 @@ def _kpi_grid(kpis: KpiSet) -> str:
         f'<div style="font-size:20px;font-weight:700;color:{_INK};">{escape(value)}</div>'
         f'<div style="font-size:12px;color:{_MUTED};margin-top:2px;">{escape(label)}</div>'
         f"</div></td>"
-        + ("</tr><tr>" if (i % 3 == 2) else "")
+        + ("</tr><tr>" if (i % 3 == 2 and i != len(cards) - 1) else "")
         for i, (label, value) in enumerate(cards)
     )
     return (
