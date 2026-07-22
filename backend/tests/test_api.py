@@ -35,6 +35,13 @@ class _FakeResponder:
             answer="Grounded test answer.",
         )
 
+    def answer_from_summary(self, summary, question: str) -> ChatResponse:
+        return ChatResponse(
+            business_date=summary.business_date,
+            question=question,
+            answer="Grounded test answer.",
+        )
+
 
 @pytest.fixture()
 def client(tmp_path: Path) -> TestClient:

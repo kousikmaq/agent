@@ -8,18 +8,22 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 
 # --- Configuration & validation ---
-pydantic==2.10.4
+# pydantic==2.10.4
+pydantic==2.11.7
 pydantic-settings==2.7.1
-python-dotenv==1.0.1
+# python-dotenv==1.0.1
+python-dotenv==1.1.1
 
 # --- Optimization engine (used from Phase: Optimization onward) ---
-ortools==9.11.4210
+# ortools==9.11.4210
+ortools==9.12.4544
 
 # --- Data handling (used from Phase: Ingestion/Simulator onward) ---
 pandas==2.2.3
 
 # --- Azure OpenAI chat assistant (used from Phase: Explanation/Chat onward) ---
-openai==1.59.6
+# openai==1.59.6
+openai==2.8.0
 
 # --- Azure AD auth for Azure OpenAI (token auth, no API keys) ---
 azure-identity==1.19.0

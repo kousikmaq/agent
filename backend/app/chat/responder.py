@@ -12,6 +12,7 @@ from app.core.logging import get_logger
 from app.domain.models.base import FrozenDomainModel
 from app.domain.models.explanation import ExplanationContext
 from app.chat.azure_client import AzureOpenAIChatClient, ChatCompletionClient
+from app.chat.intent import fast_response
 from app.chat.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.explanation import ExplanationContextBuilder
 from app.explanation.schema import ExplanationSummary
@@ -57,7 +58,23 @@ class ChatResponder:
     def answer_from_summary(
         self, summary: ExplanationSummary, question: str
     ) -> ChatResponse:
-        """Answer using an already-curated :class:`ExplanationSummary`."""
+        """Answer using an already-curated :class:`ExplanationSummary`.
+
+        Greetings and off-topic or vague questions are short-circuited by a fast,
+        deterministic intent check and answered instantly - no LLM call. Only
+        on-topic questions incur the slower grounded completion.
+        """
+        canned = fast_response(question)
+        if canned is not None:
+            logger.info(
+                "Non-grounded question for %s; returning fast reply (no LLM call).",
+                summary.business_date,
+            )
+            return ChatResponse(
+                business_date=summary.business_date,
+                question=question,
+                answer=canned,
+            )
         user_prompt = build_user_prompt(summary, question)
         logger.info(
             "Answering planner question for %s (%d chars of grounded context).",

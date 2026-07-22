@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends
 from app.api.v1.deps import get_chat_responder, get_results_store
 from app.api.v1.schemas import ChatRequest
 from app.chat import ChatResponder
+from app.chat.intent import fast_response
 from app.chat.responder import ChatResponse
 from app.core.exceptions import NotFoundError
 from app.explanation import ExplanationContextBuilder
@@ -93,6 +94,15 @@ async def ask(
     responder: Annotated[ChatResponder, Depends(get_chat_responder)],
 ) -> ChatResponse:
     """Answer a planner question grounded on the day's explanation context."""
+    # Fast path: greetings and off-topic / vague questions are answered instantly
+    # and never touch the context store or the machine-trend I/O below.
+    canned = fast_response(request.question)
+    if canned is not None:
+        return ChatResponse(
+            business_date=business_date,
+            question=request.question,
+            answer=canned,
+        )
     context = store.load_context(business_date)
     if context is None:
         raise NotFoundError(

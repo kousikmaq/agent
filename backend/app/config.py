@@ -10,10 +10,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+# previously: from typing import Literal
+# now:
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+# previously: from pydantic_settings import BaseSettings, SettingsConfigDict
+# now:
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Resolve important base directories relative to this file so the app behaves
 # consistently regardless of the current working directory.
@@ -50,7 +54,13 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # --- CORS (comma-separated list in the environment) ---
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # previously:
+    # cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # now: NoDecode prevents pydantic-settings from JSON-decoding the value so the
+    #      comma-separated string is handled by the field_validator below.
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:5173"]
+    )
 
     # --- Logging ---
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"

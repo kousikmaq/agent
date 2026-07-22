@@ -133,3 +133,86 @@ def test_azure_client_requires_configuration() -> None:
     client = AzureOpenAIChatClient(settings=settings)
     with pytest.raises(ConfigurationError):
         client.complete("sys", "user")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What are the top capacity bottlenecks today?",
+        "Why are orders at risk of being late?",
+        "Which recommendations are feasible right now?",
+        "How does the overtime scenario compare to the baseline?",
+        "What is driving the makespan?",
+        "Why is ORD-0012 late?",
+        "Is MC-0002 overloaded?",
+    ],
+)
+def test_classify_intent_on_topic(question: str) -> None:
+    from app.chat.intent import classify_intent
+
+    assert classify_intent(question) == "on_topic"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "hi",
+        "Hello!",
+        "hey there",
+        "Good morning",
+        "thanks",
+        "how are you?",
+    ],
+)
+def test_classify_intent_greeting(question: str) -> None:
+    from app.chat.intent import classify_intent
+
+    assert classify_intent(question) == "greeting"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Who is Modi?",
+        "Tell me a joke.",
+        "What's the weather like?",
+        "",
+    ],
+)
+def test_classify_intent_off_topic(question: str) -> None:
+    from app.chat.intent import classify_intent
+
+    assert classify_intent(question) == "off_topic"
+
+
+def test_greeting_skips_llm_and_returns_welcome() -> None:
+    from app.chat.intent import GREETING_RESPONSE
+
+    client = FakeClient(reply="should not be used")
+    response = ChatResponder(client).answer(_context(), "hello")
+
+    assert client.calls == 0
+    assert response.answer == GREETING_RESPONSE
+    assert response.question == "hello"
+
+
+def test_off_topic_question_skips_llm_and_returns_redirect() -> None:
+    from app.chat.intent import OFF_TOPIC_RESPONSE
+
+    client = FakeClient(reply="should not be used")
+    response = ChatResponder(client).answer(_context(), "Who is Modi?")
+
+    # Fast path: no grounded LLM call was made.
+    assert client.calls == 0
+    assert response.answer == OFF_TOPIC_RESPONSE
+    assert response.business_date == DATE
+    assert response.question == "Who is Modi?"
+
+
+def test_on_topic_question_uses_grounded_llm() -> None:
+    client = FakeClient(reply="The makespan is 60 minutes.")
+    response = ChatResponder(client).answer(_context(), "What is the makespan?")
+
+    # Slow path: the grounded completion is invoked.
+    assert client.calls == 1
+    assert response.answer == "The makespan is 60 minutes."
