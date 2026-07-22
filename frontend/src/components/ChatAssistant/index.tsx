@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, ApiError } from "../../api/client";
+import { toast } from "../Toast";
 
 interface Props {
   businessDate: string;
@@ -19,6 +20,90 @@ const SUGGESTIONS = [
   "How does the overtime scenario compare to the baseline?",
   "What is driving the makespan?",
 ];
+
+const MATERIAL_RE = /\b(RM-\d+)\b/;
+
+interface QuickAction {
+  key: string;
+  label: string;
+  run: () => Promise<void>;
+}
+
+/** Derive agentic follow-up actions from an assistant answer. */
+function suggestedActions(text: string, date: string): QuickAction[] {
+  const actions: QuickAction[] = [];
+  if (/\brisk|late|bottleneck|overdue|delay/i.test(text)) {
+    actions.push({
+      key: "email-risks",
+      label: "✉ Email risk summary",
+      run: async () => {
+        const r = await api.emailReport(date, {
+          report_type: "risks",
+          preview: false,
+        });
+        toast(
+          `Risk summary emailed to ${"recipient" in r ? r.recipient : "the team"}`,
+          "success"
+        );
+      },
+    });
+  }
+  const mat = text.match(MATERIAL_RE);
+  if (mat) {
+    const item = mat[1];
+    actions.push({
+      key: `order-${item}`,
+      label: `📦 Place order for ${item}`,
+      run: async () => {
+        const r = await api.placeOrder({
+          item,
+          reason: "Requested from the assistant conversation.",
+        });
+        toast(
+          `Purchase order for ${item} emailed to ${
+            "recipient" in r ? r.recipient : "the team"
+          }`,
+          "success"
+        );
+      },
+    });
+  }
+  return actions;
+}
+
+/** Row of agentic action chips shown under an assistant answer. */
+function ActionChips({ text, date }: { text: string; date: string }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const actions = suggestedActions(text, date);
+  if (actions.length === 0) return null;
+  return (
+    <div className="chat-actions">
+      {actions.map((a) => (
+        <button
+          key={a.key}
+          type="button"
+          className="chat-action-chip"
+          disabled={busy !== null}
+          onClick={async () => {
+            setBusy(a.key);
+            try {
+              await a.run();
+            } catch (e) {
+              toast(
+                e instanceof ApiError ? e.message : "Action failed",
+                "error"
+              );
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          {busy === a.key ? "Working…" : a.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /**
  * Planner chat assistant. Sends questions to the explain-only Azure OpenAI
@@ -87,6 +172,9 @@ export function ChatAssistant({ businessDate, onClose }: Props) {
           <div key={i} className={`chat-msg ${m.role}`}>
             <span className="chat-role">{m.role === "user" ? "You" : "Assistant"}</span>
             <div className="chat-text">{m.text}</div>
+            {m.role === "assistant" && (
+              <ActionChips text={m.text} date={businessDate} />
+            )}
           </div>
         ))}
         {busy && <div className="chat-msg assistant">Thinking…</div>}

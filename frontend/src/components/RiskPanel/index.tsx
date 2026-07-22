@@ -6,10 +6,15 @@ import type {
   RiskReport,
   RiskSeverity,
 } from "../../types/api";
+import { api, ApiError } from "../../api/client";
+import { ActionButton } from "../ActionButton";
+import { toast } from "../Toast";
 
 interface Props {
   report: RiskReport;
   recommendations?: RecommendationSet | null;
+  /** Business date the report applies to; enables the email/order actions. */
+  businessDate?: string;
   /** Raise the priority of the given orders and re-plan. `token` marks which
    * control triggered it (a risk_id, or "__bulk__" for a bulk action). */
   onMitigate?: (orderIds: string[], token: string) => void;
@@ -109,6 +114,7 @@ function delayedOrderIds(risk: Risk): string[] {
 export function RiskPanel({
   report,
   recommendations,
+  businessDate,
   onMitigate,
   onApplyFix,
   onApplyAll,
@@ -275,6 +281,26 @@ export function RiskPanel({
   };
 
   const clearSelection = () => setSelected(new Set());
+
+  // Agentic action: email a purchase-order request for a material shortage.
+  const placeOrderFor = async (risk: Risk) => {
+    const item = risk.affected_entities.material_ids?.[0] ?? "material";
+    const orderId = risk.affected_entities.order_ids?.[0] ?? null;
+    try {
+      const res = await api.placeOrder({
+        item,
+        order_id: orderId,
+        reason: risk.description,
+      });
+      toast(`Purchase order for ${item} emailed to ${res.recipient}`, "success");
+    } catch (e) {
+      toast(
+        e instanceof ApiError ? e.message : "Failed to place order",
+        "error"
+      );
+      throw e;
+    }
+  };
 
   return (
     <div className="panel-list">
@@ -573,6 +599,20 @@ export function RiskPanel({
               >
                 {st === "resolved" ? "Resolved ✓" : "Mark resolved"}
               </button>
+              {businessDate && risk.risk_type === "MATERIAL_SHORTAGE" && (
+                <ActionButton
+                  variant="ghost"
+                  icon="📦"
+                  label={`Place order${
+                    risk.affected_entities.material_ids?.[0]
+                      ? ` (${risk.affected_entities.material_ids[0]})`
+                      : ""
+                  }`}
+                  pendingLabel="Ordering…"
+                  successLabel="Order sent"
+                  onAction={() => placeOrderFor(risk)}
+                />
+              )}
             </div>
           </div>
         );

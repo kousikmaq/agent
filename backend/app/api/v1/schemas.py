@@ -129,3 +129,86 @@ class ChatRequest(BaseModel):
     """A planner question about a planned production day."""
 
     question: str = Field(..., min_length=1, description="The planner's question.")
+
+
+class EmailRisksRequest(BaseModel):
+    """Request body to email the day's risk summary."""
+
+    severities: list[str] | None = Field(
+        default=None,
+        description="Optional severity filter (e.g. ['CRITICAL','HIGH']). "
+        "Omit to include all risks.",
+    )
+    to: str | None = Field(
+        default=None,
+        description="Optional recipient override; defaults to ALERT_EMAIL_TO.",
+    )
+    preview: bool = Field(
+        default=False,
+        description="When true, render and return the email without sending it.",
+    )
+
+
+class PlaceOrderRequest(BaseModel):
+    """Request body to email a purchase-order / material replenishment request."""
+
+    item: str = Field(..., min_length=1, description="Item or material to order.")
+    quantity: str = Field(
+        default="As required", description="Requested quantity (free text)."
+    )
+    supplier: str | None = Field(default=None, description="Preferred supplier, if any.")
+    order_id: str | None = Field(
+        default=None, description="Production order this replenishment supports."
+    )
+    needed_by: str | None = Field(default=None, description="Required-by date/time.")
+    reason: str | None = Field(default=None, description="Justification for the request.")
+    to: str | None = Field(
+        default=None,
+        description="Optional recipient override; defaults to ALERT_EMAIL_TO.",
+    )
+    preview: bool = Field(
+        default=False,
+        description="When true, render and return the email without sending it.",
+    )
+
+
+class EmailActionResponse(BaseModel):
+    """Receipt for a dispatched email action."""
+
+    sent: bool = Field(..., description="Whether the email was dispatched.")
+    subject: str = Field(..., description="Subject line of the email sent.")
+    recipient: str = Field(..., description="Address the email was sent to.")
+
+
+class EmailReportRequest(BaseModel):
+    """Request to email (or preview) a per-tab report."""
+
+    report_type: str = Field(
+        ..., description="Report/tab identifier (overview, orders, scenarios, ...)."
+    )
+    role: str | None = Field(
+        default=None, description="Operational role the report is addressed to."
+    )
+    to: str | None = Field(
+        default=None, description="Optional recipient override; defaults to ALERT_EMAIL_TO."
+    )
+    preview: bool = Field(
+        default=False,
+        description="When true, render and return the email without sending it.",
+    )
+
+
+class EmailPreviewResponse(BaseModel):
+    """Rendered email returned for a preview (no send)."""
+
+    sent: bool = Field(default=False, description="Always false for a preview.")
+    subject: str = Field(..., description="Rendered subject line.")
+    html: str = Field(..., description="Rendered HTML body.")
+    recipient: str = Field(..., description="Address the email would be sent to.")
+
+
+class RolesResponse(BaseModel):
+    """Available operational roles a report can be addressed to."""
+
+    roles: list[str]
+

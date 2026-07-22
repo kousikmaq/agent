@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.routes_analytics import router as analytics_router
+from app.api.v1.routes_actions import router as actions_router
 from app.api.v1.routes_chat import router as chat_router
 from app.api.v1.routes_data import router as data_router
 from app.api.v1.routes_deliveries import router as deliveries_router
@@ -35,5 +36,6 @@ api_router.include_router(recommendations_router)
 api_router.include_router(scenarios_router)
 api_router.include_router(chat_router)
 api_router.include_router(orchestrate_router)
+api_router.include_router(actions_router)
 
 __all__ = ["api_router"]

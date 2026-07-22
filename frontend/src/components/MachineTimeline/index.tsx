@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { ScheduledOperation } from "../../types/api";
 import { fmtDateTime, durationMinutes } from "../../utils/format";
 
@@ -14,9 +14,13 @@ function colourFor(key: string): string {
 
 /**
  * Timeline of scheduled operations grouped by machine, revealing machine
- * loading and idle gaps across the schedule span.
+ * loading and idle gaps across the schedule span. Click a machine to focus on
+ * just its row (others dim out).
  */
 export function MachineTimeline({ operations }: Props) {
+  const [focus, setFocus] = useState<string | null>(null);
+  const [hovered, setHovered] = useState<ScheduledOperation | null>(null);
+
   const { rows, min, span, ticks } = useMemo(() => {
     if (operations.length === 0)
       return { rows: [], min: 0, span: 1, ticks: [] };
@@ -63,65 +67,109 @@ export function MachineTimeline({ operations }: Props) {
     return <p className="empty">No scheduled operations.</p>;
   }
 
+  const focusRow = focus ? rows.find(([m]) => m === focus) : undefined;
+  const focusMinutes = focusRow
+    ? focusRow[1].reduce(
+        (sum, o) => sum + durationMinutes(o.start, o.end),
+        0
+      )
+    : 0;
+
   return (
-    <div className="gantt">
-      <div className="gantt-axis">
-        <div className="gantt-label" aria-hidden="true" />
-        <div className="gantt-axis-track">
-          {ticks.map((t, i) => (
-            <div
-              key={i}
-              className="gantt-tick"
-              style={{ left: `${t.fraction * 100}%` }}
-            >
-              <span
-                className={`gantt-tick-label${t.day ? " gantt-tick-day" : ""}`}
+    <div>
+      <div className="gantt">
+        <div className="gantt-axis">
+          <div className="gantt-label" aria-hidden="true" />
+          <div className="gantt-axis-track">
+            {ticks.map((t, i) => (
+              <div
+                key={i}
+                className="gantt-tick"
+                style={{ left: `${t.fraction * 100}%` }}
               >
-                {t.label}
-              </span>
-              <span className="gantt-tick-mark" />
-            </div>
-          ))}
-        </div>
-      </div>
-      {rows.map(([machineId, ops]) => (
-        <div key={machineId} className="gantt-row">
-          <div className="gantt-label" title={machineId}>
-            {machineId}
-          </div>
-          <div className="gantt-track">
-            {ops.map((op) => {
-              const left =
-                ((new Date(op.start).getTime() - min) / span) * 100;
-              const width = Math.max(
-                0.5,
-                ((new Date(op.end).getTime() - new Date(op.start).getTime()) /
-                  span) *
-                  100
-              );
-              return (
-                <div
-                  key={op.operation_id}
-                  className="gantt-bar"
-                  style={{
-                    left: `${left}%`,
-                    width: `${width}%`,
-                    backgroundColor: colourFor(op.order_id),
-                  }}
-                  title={`${op.order_id} · ${op.operation_id}\n${fmtDateTime(
-                    op.start
-                  )} → ${fmtDateTime(op.end)} (${durationMinutes(
-                    op.start,
-                    op.end
-                  )}m)`}
+                <span
+                  className={`gantt-tick-label${t.day ? " gantt-tick-day" : ""}`}
                 >
-                  <span className="gantt-bar-text">{op.order_id}</span>
-                </div>
-              );
-            })}
+                  {t.label}
+                </span>
+                <span className="gantt-tick-mark" />
+              </div>
+            ))}
           </div>
         </div>
-      ))}
+        {rows.map(([machineId, ops]) => {
+          const dim = focus ? machineId !== focus : false;
+          return (
+            <div key={machineId} className={`gantt-row${dim ? " dimmed" : ""}`}>
+              <button
+                type="button"
+                className={`gantt-label gantt-label-btn${
+                  focus === machineId ? " focused" : ""
+                }`}
+                title={`Click to focus on ${machineId}`}
+                onClick={() =>
+                  setFocus((cur) => (cur === machineId ? null : machineId))
+                }
+              >
+                {machineId}
+              </button>
+              <div className="gantt-track">
+                {ops.map((op) => {
+                  const left =
+                    ((new Date(op.start).getTime() - min) / span) * 100;
+                  const width = Math.max(
+                    0.5,
+                    ((new Date(op.end).getTime() -
+                      new Date(op.start).getTime()) /
+                      span) *
+                      100
+                  );
+                  return (
+                    <div
+                      key={`${op.order_id}-${op.operation_id}-${op.start}`}
+                      className="gantt-bar"
+                      style={{
+                        left: `${left}%`,
+                        width: `${width}%`,
+                        backgroundColor: colourFor(op.order_id),
+                      }}
+                      onMouseEnter={() => setHovered(op)}
+                      onMouseLeave={() =>
+                        setHovered((cur) => (cur === op ? null : cur))
+                      }
+                    >
+                      <span className="gantt-bar-text">{op.order_id}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="gantt-explain">
+        {hovered ? (
+          <span>
+            <strong>{hovered.machine_id}</strong> runs{" "}
+            <strong>{hovered.order_id}</strong> ({hovered.operation_id}) ·{" "}
+            {fmtDateTime(hovered.start)} → {fmtDateTime(hovered.end)} (
+            {durationMinutes(hovered.start, hovered.end)}m).
+          </span>
+        ) : focus ? (
+          <span>
+            Showing only <strong>{focus}</strong>: {focusRow?.[1].length ?? 0}{" "}
+            operation(s), about {Math.round(focusMinutes)} minutes of work.
+            Click {focus} again to show every machine.
+          </span>
+        ) : (
+          <span className="muted">
+            Each row is a machine; each bar is an operation it runs, coloured by
+            order. Gaps between bars are idle time. <strong>Click a machine</strong>{" "}
+            on the left to focus on it, or hover a bar for details.
+          </span>
+        )}
+      </div>
     </div>
   );
 }

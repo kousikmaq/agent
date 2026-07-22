@@ -1,11 +1,60 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ShopFloorPage } from "./pages/ShopFloorPage";
+import { Toaster } from "./components/Toast";
+import { LoginPage } from "./components/LoginPage";
+import { AuthProvider, useAuth } from "./auth/useAuth";
 
 type Page = "planning" | "shopfloor";
 
-/** Application root. Switches between the Planning and Shop Floor pages. */
-export default function App() {
+/** User menu shown top-right once signed in. */
+function UserMenu() {
+  const { user, signOut } = useAuth();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  if (!user) return null;
+  const initials = user.name
+    .split(" ")
+    .map((p) => p.charAt(0))
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button className="user-chip" onClick={() => setOpen((o) => !o)}>
+        <span className="user-avatar">{initials}</span>
+        <span className="user-name">{user.name}</span>
+        <span className="user-caret" aria-hidden>
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div className="user-dropdown">
+          <div className="user-dropdown-head">
+            <div className="user-dropdown-name">{user.name}</div>
+            <div className="user-dropdown-email">{user.email}</div>
+          </div>
+          <button className="user-signout" onClick={signOut}>
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Authenticated application shell (nav + pages). */
+function Workspace() {
   const [page, setPage] = useState<Page>("planning");
 
   return (
@@ -26,8 +75,25 @@ export default function App() {
             Live Operations
           </button>
         </div>
+        <UserMenu />
       </nav>
       {page === "planning" ? <DashboardPage /> : <ShopFloorPage />}
+      <Toaster />
     </div>
+  );
+}
+
+/** Gate the workspace behind sign-in. */
+function Gate() {
+  const { user } = useAuth();
+  return user ? <Workspace /> : <LoginPage />;
+}
+
+/** Application root. */
+export default function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
   );
 }

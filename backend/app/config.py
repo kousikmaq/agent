@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     # auth (DefaultAzureCredential) is used.
     azure_openai_api_key: str | None = None
 
+    # --- Email / SMTP (agentic notification actions) ---
+    # Uses the standard PPO_ prefix, e.g. PPO_SMTP_HOST, PPO_ALERT_EMAIL_TO.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True
+    alert_email_from: str | None = None
+    alert_email_to: str | None = None
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, value: object) -> object:

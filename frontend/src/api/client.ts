@@ -8,13 +8,18 @@ import type {
   DatesResponse,
   DeliveryDriftReport,
   DeliveryReport,
+  EmailReportRequest,
+  EmailResult,
+  EmailRisksRequest,
   FactorySnapshot,
   GenerateDataResponse,
   KpiSet,
   OrchestrationResult,
+  PlaceOrderRequest,
   PlanModifications,
   RecommendationSet,
   RiskReport,
+  RolesResponse,
   ScenarioComparison,
   ScheduleResult,
   ShopFloorStatus,
@@ -163,4 +168,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ run_id, approve, gate }),
     }),
+
+  emailRisks: (date: string, payload: EmailRisksRequest = {}) =>
+    request<EmailResult>(`/actions/${date}/email-risks`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  emailReport: (date: string, payload: EmailReportRequest) =>
+    request<EmailResult>(`/actions/${date}/email-report`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  placeOrder: (payload: PlaceOrderRequest) =>
+    request<EmailResult>("/actions/place-order", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  getRoles: () => request<RolesResponse>("/actions/roles"),
 };

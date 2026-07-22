@@ -11,6 +11,7 @@ from functools import lru_cache
 from app.chat import AzureOpenAIChatClient, ChatResponder
 from app.config import get_settings
 from app.ingestion import CsvDataSource
+from app.notifications import EmailService
 from app.services import PlanningOrchestrator, ResultsStore
 from simulator.config import SimulatorConfig
 from simulator.engine import SimulatorEngine
@@ -48,3 +49,9 @@ def get_simulator_engine() -> SimulatorEngine:
 def get_chat_responder() -> ChatResponder:
     """Return the explain-only chat responder backed by Azure OpenAI."""
     return ChatResponder(AzureOpenAIChatClient())
+
+
+@lru_cache
+def get_email_service() -> EmailService:
+    """Return the shared email service for agentic notification actions."""
+    return EmailService(get_settings())

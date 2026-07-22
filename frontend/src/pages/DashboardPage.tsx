@@ -25,6 +25,7 @@ import { ScenarioComparison } from "../components/ScenarioComparison";
 import { CurrentPlanPanel } from "../components/CurrentPlanPanel";
 import { ChatAssistant } from "../components/ChatAssistant";
 import { NextWeekPlanModal } from "../components/NextWeekPlanModal";
+import { ReportEmailButton } from "../components/EmailButton";
 import { DashboardSkeleton } from "../components/Skeleton";
 import { datesUpToToday, todayIso } from "../utils/format";
 
@@ -49,12 +50,11 @@ interface PlanData {
   scenarios: ScenarioComparisonType;
 }
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
+const TABS: { id: Tab; label: string }[] = [  { id: "overview", label: "Overview" },
   { id: "weekly", label: "Weekly Plan" },
   { id: "progress", label: "Daily Progress" },
-  { id: "gantt", label: "Gantt" },
-  { id: "machines", label: "Machines" },
+  { id: "gantt", label: "Gantt(Orders)" },
+  { id: "machines", label: "Gantt(Machines)" },
   { id: "orders", label: "Orders" },
   { id: "deliveries", label: "Deliveries" },
   { id: "drift", label: "Drift" },
@@ -74,6 +74,21 @@ const NEXT_DAY_HIDDEN: Tab[] = [
 
 // A snappier solver budget for interactive risk-mitigation re-plans.
 const MITIGATE_MAX_SECONDS = 10;
+
+// Which backend report each tab emails.
+const REPORT_FOR_TAB: Record<Tab, string> = {
+  overview: "overview",
+  weekly: "weekly",
+  progress: "daily_progress",
+  gantt: "gantt_orders",
+  machines: "gantt_machines",
+  orders: "orders",
+  deliveries: "deliveries",
+  drift: "drift",
+  risks: "risks",
+  scenarios: "scenarios",
+  current: "current_plan",
+};
 
 export function DashboardPage() {
   const [dates, setDates] = useState<string[]>([]);
@@ -420,9 +435,6 @@ export function DashboardPage() {
       <header className="app-header">
         <div>
           <h1>Production Planning &amp; Schedule Optimization</h1>
-          <p className="subtitle">
-            Deterministic OR-Tools scheduling · explain-only assistant
-          </p>
         </div>
         <div className="controls">
           <select
@@ -495,6 +507,15 @@ export function DashboardPage() {
           </nav>
 
           <section className="tab-panel">
+            {selectedDate && (
+              <div className="tab-actionbar">
+                <ReportEmailButton
+                  date={selectedDate}
+                  reportType={REPORT_FOR_TAB[tab]}
+                  label="Email this tab"
+                />
+              </div>
+            )}
             {tab === "overview" && (
               <OverviewPanel
                 schedule={daySchedule ?? data.schedule}
@@ -536,7 +557,14 @@ export function DashboardPage() {
                 <p className="empty">No progress data for this day.</p>
               ))}
             {tab === "machines" && <MachineTimeline operations={ops} />}
-            {tab === "orders" && <OrderTable operations={ops} />}
+            {tab === "orders" && (
+              <OrderTable
+                operations={ops}
+                priorities={Object.fromEntries(
+                  (deliveries?.lines ?? []).map((l) => [l.order_id, l.priority])
+                )}
+              />
+            )}
             {tab === "deliveries" &&
               (deliveries ? (
                 <DeliveriesPanel
@@ -558,6 +586,7 @@ export function DashboardPage() {
               <RiskPanel
                 report={data.risks}
                 recommendations={data.recommendations}
+                businessDate={selectedDate}
                 onMitigate={onMitigateRisk}
                 onApplyFix={onApplyRiskFix}
                 onApplyAll={onApplyAllRiskFixes}
@@ -606,10 +635,13 @@ export function DashboardPage() {
 
       {!assistantOpen && (
         <button
-          className="assistant-toggle"
+          className="assistant-toggle chat-fab"
           onClick={() => setAssistantOpen(true)}
           title="Ask the assistant"
         >
+          <span className="fab-spark" aria-hidden>
+            ✨
+          </span>
           Ask the assistant
         </button>
       )}

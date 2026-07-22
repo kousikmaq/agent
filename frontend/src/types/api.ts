@@ -110,6 +110,47 @@ export interface ChatResponse {
   answer: string;
 }
 
+export interface EmailRisksRequest {
+  severities?: string[] | null;
+  to?: string | null;
+}
+
+export interface PlaceOrderRequest {
+  item: string;
+  quantity?: string;
+  supplier?: string | null;
+  order_id?: string | null;
+  needed_by?: string | null;
+  reason?: string | null;
+  to?: string | null;
+}
+
+export interface EmailActionResponse {
+  sent: boolean;
+  subject: string;
+  recipient: string;
+}
+
+export interface EmailPreviewResponse {
+  sent: false;
+  subject: string;
+  html: string;
+  recipient: string;
+}
+
+export type EmailResult = EmailActionResponse | EmailPreviewResponse;
+
+export interface EmailReportRequest {
+  report_type: string;
+  role?: string | null;
+  to?: string | null;
+  preview?: boolean;
+}
+
+export interface RolesResponse {
+  roles: string[];
+}
+
 export type DeliveryStatus = "ON_TRACK" | "AT_RISK" | "LATE" | "UNSCHEDULED";
 
 export interface DeliveryLine {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { RiskReport, ShopFloorStatus } from "../types/api";
 import { ShopFloorBoard } from "../components/ShopFloorBoard";
+import { ReportEmailButton } from "../components/EmailButton";
 import { datesUpToToday } from "../utils/format";
 
 /** Shop-floor monitoring page: live status of machines, workers, orders, materials. */
@@ -76,6 +77,15 @@ export function ShopFloorPage() {
       {message && <div className="status-bar">{message}</div>}
 
       <section className="tab-panel">
+        {selectedDate && status && (
+          <div className="tab-actionbar">
+            <ReportEmailButton
+              date={selectedDate}
+              reportType="live_ops"
+              label="Email status"
+            />
+          </div>
+        )}
         {status ? (
           <ShopFloorBoard status={status} risks={risks} />
         ) : (
