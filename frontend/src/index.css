@@ -2191,7 +2191,6 @@ button.primary:hover:not(:disabled) {
 
 /* --- Ask-the-assistant animated button --- */
 .chat-fab {
-  position: relative;
   overflow: hidden;
 }
 .chat-fab::before {
