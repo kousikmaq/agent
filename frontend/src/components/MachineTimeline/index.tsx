@@ -76,6 +76,33 @@ export function MachineTimeline({ operations }: Props) {
 
   return (
     <div>
+      <div className="gantt-legend">
+        {rows.map(([machineId]) => (
+          <button
+            key={machineId}
+            type="button"
+            className={`gantt-legend-item${
+              focus && focus !== machineId ? " dimmed" : ""
+            }${focus === machineId ? " focused" : ""}`}
+            onClick={() =>
+              setFocus((cur) => (cur === machineId ? null : machineId))
+            }
+            title={`Click to focus on ${machineId}`}
+          >
+            <span
+              className="gantt-legend-swatch"
+              style={{ backgroundColor: colourFor(machineId) }}
+            />
+            {machineId}
+          </button>
+        ))}
+        {focus && (
+          <span className="gantt-focus-hint">
+            Focused on {focus} — click again to show all
+          </span>
+        )}
+      </div>
+
       <div className="gantt">
         <div className="gantt-axis">
           <div className="gantt-label" aria-hidden="true" />
