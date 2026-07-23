@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from app.analytics import AnalyticsEngine
 from app.core.logging import get_logger
 from app.domain.enums import ScenarioType
+from app.domain.models.analytics import KpiSet
 from app.domain.models.factory_state import FactoryState
 from app.domain.models.scenario import ScenarioComparison, ScenarioResult
 from app.optimization import SchedulingSolver, SolverOptions
@@ -49,14 +50,35 @@ class ScenarioPlanningEngine:
         self._solver = SchedulingSolver(self._options)
         self._analytics = AnalyticsEngine()
 
-    def plan(self, state: FactoryState, policy: RulePolicy) -> ScenarioComparison:
-        """Solve and compare every scenario, returning the comparison."""
+    def plan(
+        self,
+        state: FactoryState,
+        policy: RulePolicy,
+        baseline_kpis: KpiSet | None = None,
+    ) -> ScenarioComparison:
+        """Solve and compare every scenario, returning the comparison.
+
+        When ``baseline_kpis`` is supplied, the baseline ("Current Plan")
+        scenario reuses those KPIs verbatim instead of re-solving the state.
+        This keeps the Scenarios tab's baseline identical to the committed
+        plan's KPIs (top bar, Overview, assistant); re-solving the baseline
+        independently can diverge because the CP-SAT solver runs with several
+        parallel workers and is not bit-for-bit reproducible across runs.
+        """
         results: list[ScenarioResult] = []
         baseline_result: ScenarioResult | None = None
         baseline_type = ScenarioType.CURRENT_PLAN
 
         for spec in self._scenarios:
-            result = self._run_scenario(state, policy, spec)
+            if spec.is_baseline and baseline_kpis is not None:
+                result = ScenarioResult(
+                    scenario_type=spec.definition.scenario_type,
+                    name=spec.definition.name,
+                    kpis=extract_scenario_kpis(baseline_kpis),
+                    is_baseline=True,
+                )
+            else:
+                result = self._run_scenario(state, policy, spec)
             results.append(result)
             if spec.is_baseline:
                 baseline_result = result

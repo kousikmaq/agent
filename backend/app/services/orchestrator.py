@@ -210,7 +210,9 @@ class PlanningOrchestrator:
         kpis = self._analytics.compute(state, schedule)
         risks = self._risk.detect(state, schedule, kpis)
         recommendations = self._recommendation.recommend(state, schedule, risks)
-        scenario_comparison = ScenarioPlanningEngine(options=options).plan(state, policy)
+        scenario_comparison = ScenarioPlanningEngine(options=options).plan(
+            state, policy, baseline_kpis=kpis
+        )
 
         context = self._explanation.build(
             business_date=business_date,
@@ -355,7 +357,7 @@ class PlanningOrchestrator:
         risks = self._risk.detect(transformed, schedule, kpis)
         recommendations = self._recommendation.recommend(transformed, schedule, risks)
         scenario_comparison = ScenarioPlanningEngine(options=options).plan(
-            transformed, policy
+            transformed, policy, baseline_kpis=kpis
         )
 
         context = self._explanation.build(
