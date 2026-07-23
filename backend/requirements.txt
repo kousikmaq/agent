@@ -4,7 +4,8 @@
 # Pinned to compatible ranges for reproducible, production-grade builds.
 
 # --- Web framework / ASGI ---
-fastapi==0.115.6
+# fastapi==0.115.6
+fastapi==0.121.0
 uvicorn[standard]==0.34.0
 
 # --- Configuration & validation ---
