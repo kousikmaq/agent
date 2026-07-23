@@ -51,11 +51,16 @@ export function MachineTimeline({ operations }: Props) {
     for (; cursor.getTime() <= maxT; cursor.setHours(cursor.getHours() + step)) {
       const hour = cursor.getHours();
       const isMidnight = hour === 0;
+      const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+      const ampm = hour < 12 ? "AM" : "PM";
       ticks.push({
         fraction: (cursor.getTime() - minT) / spanT,
         label: isMidnight
-          ? `${cursor.getMonth() + 1}/${cursor.getDate()}`
-          : String(hour % 12 === 0 ? 12 : hour % 12),
+          ? cursor.toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })
+          : `${hour12} ${ampm}`,
         day: isMidnight,
       });
     }

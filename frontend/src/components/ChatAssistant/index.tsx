@@ -108,26 +108,30 @@ function ActionChips({ text, date }: { text: string; date: string }) {
 }
 
 /** Animated step-by-step progress shown while the assistant is working. */
-const THINKING_STEPS = [
-  "Analysing your question…",
-  "Getting the day's context…",
-  "Thinking it through…",
-  "Generating the response…",
-  "Almost done…",
+const THINKING_STEPS: { label: string; hold: number }[] = [
+  { label: "Analysing your question…", hold: 900 },
+  { label: "Getting the day's context…", hold: 1200 },
+  { label: "Thinking it through…", hold: 1800 },
+  { label: "Generating the response…", hold: 4000 },
+  // Reached only after ~7.9s, so it flashes briefly right before the answer.
+  { label: "Almost done…", hold: 0 },
 ];
 
 function ThinkingSteps() {
   const [step, setStep] = useState(0);
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setStep((s) => (s < THINKING_STEPS.length - 1 ? s + 1 : s));
-    }, 1100);
-    return () => window.clearInterval(id);
+    const timers: number[] = [];
+    let cumulative = 0;
+    for (let i = 1; i < THINKING_STEPS.length; i++) {
+      cumulative += THINKING_STEPS[i - 1].hold;
+      timers.push(window.setTimeout(() => setStep(i), cumulative));
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t));
   }, []);
   return (
     <div className="chat-msg assistant chat-thinking">
       <span className="ab-spinner" aria-hidden />
-      <span className="chat-thinking-text">{THINKING_STEPS[step]}</span>
+      <span className="chat-thinking-text">{THINKING_STEPS[step].label}</span>
     </div>
   );
 }
