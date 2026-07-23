@@ -26,7 +26,7 @@ import { CurrentPlanPanel } from "../components/CurrentPlanPanel";
 import { ChatAssistant } from "../components/ChatAssistant";
 import { NextWeekPlanModal } from "../components/NextWeekPlanModal";
 import { ReportEmailButton } from "../components/EmailButton";
-import { DashboardSkeleton } from "../components/Skeleton";
+import { DashboardSkeleton, PanelSkeleton } from "../components/Skeleton";
 import { datesUpToToday, todayIso } from "../utils/format";
 
 type Tab =
@@ -106,6 +106,10 @@ export function DashboardPage() {
   );
   const [weekly, setWeekly] = useState<WeeklyPlanReport | null>(null);
   const [weeklyAsOf, setWeeklyAsOf] = useState<string>("");
+  // Loading flags for the async sub-loads, so each tab can show a skeleton.
+  const [deliveriesLoading, setDeliveriesLoading] = useState(false);
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
+  const [modificationsLoading, setModificationsLoading] = useState(false);
   // A generated future day (> today): a forward plan with no actuals yet.
   const [nextDayPlan, setNextDayPlan] = useState<string | null>(null);
   // Side assistant dock visibility.
@@ -138,14 +142,18 @@ export function DashboardPage() {
   }, []);
 
   const loadWeekly = useCallback(async (date: string, asOf?: string) => {
+    setWeeklyLoading(true);
     try {
       setWeekly(await api.getWeeklyPlan(date, asOf));
     } catch {
       setWeekly(null);
+    } finally {
+      setWeeklyLoading(false);
     }
   }, []);
 
   const loadDeliveries = useCallback(async (date: string) => {
+    setDeliveriesLoading(true);
     try {
       setDeliveries(await api.getDeliveries(date));
     } catch {
@@ -155,6 +163,8 @@ export function DashboardPage() {
       setDrift(await api.getDeliveryDrift(date));
     } catch {
       setDrift(null);
+    } finally {
+      setDeliveriesLoading(false);
     }
   }, []);
 
@@ -176,6 +186,7 @@ export function DashboardPage() {
 
   const loadResults = useCallback(async (date: string) => {
     setLoading(true);
+    setModificationsLoading(true);
     try {
       const [schedule, kpis, risks, recommendations, scenarios] =
         await Promise.all([
@@ -203,7 +214,8 @@ export function DashboardPage() {
       api
         .getModifications(date)
         .then(setModifications)
-        .catch(() => setModifications(null));
+        .catch(() => setModifications(null))
+        .finally(() => setModificationsLoading(false));
       // Daily progress only shows actuals up to today, regardless of the
       // selected planning day.
       const asOf = todayIso();
@@ -578,7 +590,9 @@ export function DashboardPage() {
               <GanttChart operations={ops} date={data.schedule.business_date} />
             )}
             {tab === "weekly" &&
-              (weekly ? (
+              (weeklyLoading ? (
+                <PanelSkeleton />
+              ) : weekly ? (
                 <WeeklyPlanPanel report={weekly} />
               ) : (
                 <p className="empty">No weekly plan for this day.</p>
@@ -590,6 +604,8 @@ export function DashboardPage() {
                   actuals until the day has been worked. Progress is available
                   only up to today ({today}).
                 </p>
+              ) : weeklyLoading ? (
+                <PanelSkeleton />
               ) : weekly ? (
                 <DailyProgressPanel
                   report={weekly}
@@ -607,7 +623,9 @@ export function DashboardPage() {
               <OrderTable operations={ops} priorities={orderPriorities} />
             )}
             {tab === "deliveries" &&
-              (deliveries ? (
+              (deliveriesLoading ? (
+                <PanelSkeleton />
+              ) : deliveries ? (
                 <DeliveriesPanel
                   report={deliveries}
                   onMitigateInRisks={goMitigateInRisks}
@@ -618,7 +636,9 @@ export function DashboardPage() {
                 <p className="empty">No delivery data for this day.</p>
               ))}
             {tab === "drift" &&
-              (drift ? (
+              (deliveriesLoading ? (
+                <PanelSkeleton />
+              ) : drift ? (
                 <DeliveryDrift report={drift} />
               ) : (
                 <p className="empty">No drift data for this day.</p>
@@ -645,7 +665,9 @@ export function DashboardPage() {
               />
             )}
             {tab === "current" &&
-              (modifications ? (
+              (modificationsLoading ? (
+                <PanelSkeleton />
+              ) : modifications ? (
                 <CurrentPlanPanel data={modifications} onRevert={onRevertPlan} reverting={busy} />
               ) : (
                 <p className="empty">

@@ -7,6 +7,17 @@ export function Skeleton({ className }: SkeletonProps) {
   return <span className={`skeleton ${className ?? ""}`} aria-hidden="true" />;
 }
 
+/** Generic tab-panel loading placeholder (a few shimmering rows). */
+export function PanelSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="skeleton-panel" aria-busy="true" aria-label="Loading">
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} className="skeleton-row" />
+      ))}
+    </div>
+  );
+}
+
 /** Full loading placeholder that mirrors the dashboard layout. */
 export function DashboardSkeleton() {
   return (

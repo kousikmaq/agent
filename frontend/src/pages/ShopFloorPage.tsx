@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type { RiskReport, ShopFloorStatus } from "../types/api";
 import { ShopFloorBoard } from "../components/ShopFloorBoard";
 import { ReportEmailButton } from "../components/EmailButton";
+import { PanelSkeleton } from "../components/Skeleton";
 import { datesUpToToday } from "../utils/format";
 
 /** Shop-floor monitoring page: live status of machines, workers, orders, materials. */
@@ -86,7 +87,9 @@ export function ShopFloorPage() {
             />
           </div>
         )}
-        {status ? (
+        {busy ? (
+          <PanelSkeleton />
+        ) : status ? (
           <ShopFloorBoard status={status} risks={risks} />
         ) : (
           <p className="empty">Select a day to see shop-floor status.</p>
