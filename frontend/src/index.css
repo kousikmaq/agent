@@ -2373,4 +2373,75 @@ th.sortable:hover {
   cursor: default;
 }
 
+/* --- Assistant header actions + clear --- */
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-clear {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.chat-clear:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--primary);
+}
+.chat-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Assistant step-by-step thinking indicator --- */
+.chat-thinking {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+}
+.chat-thinking-text {
+  font-size: 13px;
+  animation: chat-think-fade 0.4s ease;
+}
+@keyframes chat-think-fade {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- Assistant suggested-questions dropdown --- */
+.chat-suggest-drop {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+}
+.chat-suggest-toggle {
+  background: transparent;
+  border: none;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.chat-suggest-toggle:hover {
+  text-decoration: underline;
+}
+.chat-suggest-drop .chat-suggestions.compact {
+  margin-top: 8px;
+}
+
+/* --- Chart "Ask AI" button --- */
+.chart-ask-btn {
+  white-space: nowrap;
+}
+
 

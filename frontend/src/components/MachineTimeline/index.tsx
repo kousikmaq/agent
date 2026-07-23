@@ -66,34 +66,46 @@ export function MachineTimeline({ operations }: Props) {
     return <p className="empty">No scheduled operations.</p>;
   }
 
-  const focusRow = focus ? rows.find(([m]) => m === focus) : undefined;
-  const focusMinutes = focusRow
-    ? focusRow[1].reduce(
-        (sum, o) => sum + durationMinutes(o.start, o.end),
-        0
-      )
+  // Filter/legend is by ORDER (bars are coloured by order). Clicking an order
+  // focuses just its operations across the machines.
+  const orders = Array.from(
+    new Set(rows.flatMap(([, ops]) => ops.map((o) => o.order_id)))
+  ).sort();
+  const focusOps = focus
+    ? rows.flatMap(([, ops]) => ops.filter((o) => o.order_id === focus))
+    : [];
+  const focusMachines = focus
+    ? new Set(
+        rows
+          .filter(([, ops]) => ops.some((o) => o.order_id === focus))
+          .map(([m]) => m)
+      ).size
     : 0;
+  const focusMinutes = focusOps.reduce(
+    (sum, o) => sum + durationMinutes(o.start, o.end),
+    0
+  );
 
   return (
     <div>
       <div className="gantt-legend">
-        {rows.map(([machineId]) => (
+        {orders.map((orderId) => (
           <button
-            key={machineId}
+            key={orderId}
             type="button"
             className={`gantt-legend-item${
-              focus && focus !== machineId ? " dimmed" : ""
-            }${focus === machineId ? " focused" : ""}`}
+              focus && focus !== orderId ? " dimmed" : ""
+            }${focus === orderId ? " focused" : ""}`}
             onClick={() =>
-              setFocus((cur) => (cur === machineId ? null : machineId))
+              setFocus((cur) => (cur === orderId ? null : orderId))
             }
-            title={`Click to focus on ${machineId}`}
+            title={`Click to focus on ${orderId}`}
           >
             <span
               className="gantt-legend-swatch"
-              style={{ backgroundColor: colourFor(machineId) }}
+              style={{ backgroundColor: colourFor(orderId) }}
             />
-            {machineId}
+            {orderId}
           </button>
         ))}
         {focus && (
@@ -124,21 +136,17 @@ export function MachineTimeline({ operations }: Props) {
           </div>
         </div>
         {rows.map(([machineId, ops]) => {
-          const dim = focus ? machineId !== focus : false;
+          const rowHasFocus = focus
+            ? ops.some((o) => o.order_id === focus)
+            : true;
           return (
-            <div key={machineId} className={`gantt-row${dim ? " dimmed" : ""}`}>
-              <button
-                type="button"
-                className={`gantt-label gantt-label-btn${
-                  focus === machineId ? " focused" : ""
-                }`}
-                title={`Click to focus on ${machineId}`}
-                onClick={() =>
-                  setFocus((cur) => (cur === machineId ? null : machineId))
-                }
-              >
+            <div
+              key={machineId}
+              className={`gantt-row${focus && !rowHasFocus ? " dimmed" : ""}`}
+            >
+              <div className="gantt-label" title={machineId}>
                 {machineId}
-              </button>
+              </div>
               <div className="gantt-track">
                 {ops.map((op) => {
                   const left =
@@ -150,10 +158,11 @@ export function MachineTimeline({ operations }: Props) {
                       span) *
                       100
                   );
+                  const dim = focus ? op.order_id !== focus : false;
                   return (
                     <div
                       key={`${op.order_id}-${op.operation_id}-${op.start}`}
-                      className="gantt-bar"
+                      className={`gantt-bar${dim ? " dimmed" : ""}`}
                       style={{
                         left: `${left}%`,
                         width: `${width}%`,
@@ -179,15 +188,17 @@ export function MachineTimeline({ operations }: Props) {
       <div className="gantt-explain">
         {focus ? (
           <span>
-            Showing only <strong>{focus}</strong>: {focusRow?.[1].length ?? 0}{" "}
-            operation(s), about {Math.round(focusMinutes)} minutes of work.
-            Click {focus} again to show every machine.
+            Showing only <strong>{focus}</strong>: {focusOps.length} operation
+            {focusOps.length === 1 ? "" : "s"} across {focusMachines} machine
+            {focusMachines === 1 ? "" : "s"}, about {Math.round(focusMinutes)}{" "}
+            minutes of work. Click {focus} again to show every order.
           </span>
         ) : (
           <span className="muted">
             Each row is a machine; each bar is an operation it runs, coloured by
-            order. Gaps between bars are idle time. <strong>Click a machine</strong>{" "}
-            on the left to focus on it, or hover a bar for details.
+            order. Gaps between bars are idle time.{" "}
+            <strong>Click an order above</strong> to follow just that order across
+            the machines, or hover a bar for details.
           </span>
         )}
       </div>

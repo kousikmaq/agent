@@ -28,8 +28,7 @@ export function LoginPage() {
       <div className="login-aurora" aria-hidden />
       <form className="login-card" onSubmit={onSubmit}>
         <div className="login-brand">
-          <span className="login-logo">◆</span>
-          <span className="login-brand-name">PPO Agent</span>
+          <span className="login-logo">P</span>
         </div>
         <h1 className="login-title">Production Planning &amp; Optimization</h1>
         <p className="login-sub">

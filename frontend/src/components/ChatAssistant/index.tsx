@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { toast } from "../Toast";
 
 interface Props {
   businessDate: string;
   onClose?: () => void;
+  /** When set (and its nonce changes), the assistant auto-asks this question. */
+  seed?: { text: string; nonce: number } | null;
 }
 
 interface Message {
@@ -105,14 +107,41 @@ function ActionChips({ text, date }: { text: string; date: string }) {
   );
 }
 
+/** Animated step-by-step progress shown while the assistant is working. */
+const THINKING_STEPS = [
+  "Analysing your question…",
+  "Getting the day's context…",
+  "Thinking it through…",
+  "Generating the response…",
+  "Almost done…",
+];
+
+function ThinkingSteps() {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setStep((s) => (s < THINKING_STEPS.length - 1 ? s + 1 : s));
+    }, 1100);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <div className="chat-msg assistant chat-thinking">
+      <span className="ab-spinner" aria-hidden />
+      <span className="chat-thinking-text">{THINKING_STEPS[step]}</span>
+    </div>
+  );
+}
+
 /**
  * Planner chat assistant. Sends questions to the explain-only Azure OpenAI
  * endpoint, which is grounded solely on the day's explanation context.
  */
-export function ChatAssistant({ businessDate, onClose }: Props) {
+export function ChatAssistant({ businessDate, onClose, seed }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const lastSeed = useRef<number | null>(null);
 
   async function send(text?: string) {
     const question = (text ?? input).trim();
@@ -132,19 +161,44 @@ export function ChatAssistant({ businessDate, onClose }: Props) {
     }
   }
 
+  // Auto-ask a seeded question (e.g. from an "Ask AI" button on a chart).
+  useEffect(() => {
+    if (seed && seed.nonce !== lastSeed.current) {
+      lastSeed.current = seed.nonce;
+      send(seed.text);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed]);
+
+  const clearChat = () => {
+    setMessages([]);
+    setInput("");
+    setShowSuggestions(false);
+  };
+
   return (
     <div className="chat">
       {onClose && (
         <div className="chat-header">
           <span className="chat-title">Assistant</span>
-          <button
-            className="chat-close"
-            onClick={onClose}
-            aria-label="Close assistant"
-            title="Close assistant"
-          >
-            ×
-          </button>
+          <div className="chat-header-actions">
+            <button
+              className="chat-clear"
+              onClick={clearChat}
+              disabled={busy || messages.length === 0}
+              title="Clear conversation and start fresh"
+            >
+              Clear
+            </button>
+            <button
+              className="chat-close"
+              onClick={onClose}
+              aria-label="Close assistant"
+              title="Close assistant"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
       <div className="chat-log">
@@ -177,21 +231,35 @@ export function ChatAssistant({ businessDate, onClose }: Props) {
             )}
           </div>
         ))}
-        {busy && <div className="chat-msg assistant">Thinking…</div>}
+        {busy && <ThinkingSteps />}
       </div>
       {messages.length > 0 && (
-        <div className="chat-suggestions compact">
-          {SUGGESTIONS.map((q) => (
-            <button
-              key={q}
-              type="button"
-              className="chat-chip"
-              onClick={() => send(q)}
-              disabled={busy}
-            >
-              {q}
-            </button>
-          ))}
+        <div className="chat-suggest-drop">
+          <button
+            type="button"
+            className="chat-suggest-toggle"
+            onClick={() => setShowSuggestions((s) => !s)}
+          >
+            Suggested questions {showSuggestions ? "▴" : "▾"}
+          </button>
+          {showSuggestions && (
+            <div className="chat-suggestions compact">
+              {SUGGESTIONS.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  className="chat-chip"
+                  onClick={() => {
+                    send(q);
+                    setShowSuggestions(false);
+                  }}
+                  disabled={busy}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       <div className="chat-input">

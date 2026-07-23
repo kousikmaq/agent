@@ -106,6 +106,11 @@ export function DashboardPage() {
   const [nextDayPlan, setNextDayPlan] = useState<string | null>(null);
   // Side assistant dock visibility.
   const [assistantOpen, setAssistantOpen] = useState(false);
+  // A question to auto-ask the assistant (e.g. from a chart's "Ask AI" button).
+  const [assistantSeed, setAssistantSeed] = useState<{
+    text: string;
+    nonce: number;
+  } | null>(null);
   // Next-week plan interface preview modal.
   const [nextWeekOpen, setNextWeekOpen] = useState(false);
   // Name of the scenario currently being applied as the committed plan.
@@ -430,6 +435,17 @@ export function DashboardPage() {
     ? TABS.filter((t) => !NEXT_DAY_HIDDEN.includes(t.id))
     : TABS;
 
+  // Open the assistant and ask it to explain the current Gantt chart in plain
+  // language. "gantt" is the machine-grouped view; "machines" is order-grouped.
+  const askAboutChart = () => {
+    const text =
+      tab === "gantt"
+        ? "In simple, everyday language that anyone can understand, explain what today's machine schedule (the Gantt view grouped by machine) is showing: how each machine's time is used across the orders, which machines are busiest or are bottlenecks, roughly how long the whole plan takes (makespan), and the main things a planner should take away. Be clear and non-technical, and include a few concrete numbers."
+        : "In simple, everyday language that anyone can understand, explain what today's order schedule (the Gantt view grouped by order) is showing: how each order's operations are spread across the machines and the day, which orders are large or most at risk of being late, roughly how long the whole plan takes (makespan), and the main things a planner should take away. Be clear and non-technical, and include a few concrete numbers.";
+    setAssistantSeed({ text, nonce: Date.now() });
+    setAssistantOpen(true);
+  };
+
   return (
     <div className="app">
       <header className="app-header">
@@ -509,6 +525,19 @@ export function DashboardPage() {
           <section className="tab-panel">
             {selectedDate && (
               <div className="tab-actionbar">
+                {(tab === "gantt" || tab === "machines") && (
+                  <button
+                    type="button"
+                    className="action-btn ab-ghost chart-ask-btn"
+                    onClick={askAboutChart}
+                    title="Ask the assistant to explain this chart in simple terms"
+                  >
+                    <span className="ab-icon" aria-hidden>
+                      💡
+                    </span>
+                    Know more / Ask AI
+                  </button>
+                )}
                 <ReportEmailButton
                   date={selectedDate}
                   reportType={REPORT_FOR_TAB[tab]}
@@ -649,6 +678,7 @@ export function DashboardPage() {
         {assistantOpen && (
           <ChatAssistant
             businessDate={selectedDate}
+            seed={assistantSeed}
             onClose={() => setAssistantOpen(false)}
           />
         )}
