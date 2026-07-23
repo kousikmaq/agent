@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type {
   Recommendation,
   RecommendationSet,
@@ -39,6 +40,11 @@ interface Props {
   preselectNonce?: number;
   /** Called once the hand-off has been consumed (so it isn't re-applied). */
   onPreselectConsumed?: () => void;
+  /** Planner status markers per risk id. Controlled by the parent so the
+   * Risks-tab count badge reflects open risks and survives tab switches. When
+   * omitted, the panel keeps its own internal status state. */
+  status?: Record<string, RiskStatus>;
+  onStatusChange?: Dispatch<SetStateAction<Record<string, RiskStatus>>>;
 }
 
 const BULK = "__bulk__";
@@ -62,7 +68,7 @@ function prettyType(type: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-type RiskStatus = "open" | "acknowledged" | "mitigating" | "resolved";
+export type RiskStatus = "open" | "acknowledged" | "mitigating" | "resolved";
 
 const SEVERITY_ORDER: RiskSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 
@@ -122,8 +128,14 @@ export function RiskPanel({
   preselectOrderIds,
   preselectNonce,
   onPreselectConsumed,
+  status: statusProp,
+  onStatusChange,
 }: Props) {
-  const [status, setStatus] = useState<Record<string, RiskStatus>>({});
+  const [internalStatus, setInternalStatus] = useState<
+    Record<string, RiskStatus>
+  >({});
+  const status = statusProp ?? internalStatus;
+  const setStatus = onStatusChange ?? setInternalStatus;
   const [hideResolved, setHideResolved] = useState(false);
   const [severityFilter, setSeverityFilter] = useState<RiskSeverity | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);

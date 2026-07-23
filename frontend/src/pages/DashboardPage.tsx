@@ -4,6 +4,8 @@ import type {
   DeliveryDriftReport,
   DeliveryReport,
   KpiSet,
+  MaterialsReport,
+  PlanModification,
   PlanModifications,
   RecommendationSet,
   RiskReport,
@@ -17,10 +19,11 @@ import { WeeklyPlanPanel } from "../components/WeeklyPlanPanel";
 import { DailyProgressPanel } from "../components/DailyProgressPanel";
 import { GanttChart } from "../components/GanttChart";
 import { MachineTimeline } from "../components/MachineTimeline";
-import { OrderTable } from "../components/OrderTable";
-import { DeliveriesPanel } from "../components/DeliveriesPanel";
+import { OrdersPanel } from "../components/OrdersPanel";
 import { DeliveryDrift } from "../components/DeliveryDrift";
+import { MaterialsPanel } from "../components/MaterialsPanel";
 import { RiskPanel } from "../components/RiskPanel";
+import type { RiskStatus } from "../components/RiskPanel";
 import { ScenarioComparison } from "../components/ScenarioComparison";
 import { CurrentPlanPanel } from "../components/CurrentPlanPanel";
 import { ChatAssistant } from "../components/ChatAssistant";
@@ -36,8 +39,8 @@ type Tab =
   | "gantt"
   | "machines"
   | "orders"
-  | "deliveries"
   | "drift"
+  | "materials"
   | "risks"
   | "scenarios"
   | "current";
@@ -56,8 +59,8 @@ const TABS: { id: Tab; label: string }[] = [  { id: "overview", label: "Overview
   { id: "gantt", label: "Gantt(Machines)" },
   { id: "machines", label: "Gantt(Orders)" },
   { id: "orders", label: "Orders" },
-  { id: "deliveries", label: "Deliveries" },
   { id: "drift", label: "Drift" },
+  { id: "materials", label: "Materials" },
   { id: "risks", label: "Risks" },
   { id: "scenarios", label: "Scenarios" },
   { id: "current", label: "Current Plan" },
@@ -67,7 +70,6 @@ const TABS: { id: Tab; label: string }[] = [  { id: "overview", label: "Overview
 // and are hidden until the day is worked.
 const NEXT_DAY_HIDDEN: Tab[] = [
   "progress",
-  "deliveries",
   "drift",
   "risks",
 ];
@@ -83,14 +85,20 @@ const REPORT_FOR_TAB: Record<Tab, string> = {
   gantt: "gantt_orders",
   machines: "gantt_machines",
   orders: "orders",
-  deliveries: "deliveries",
   drift: "drift",
+  materials: "materials",
   risks: "risks",
   scenarios: "scenarios",
   current: "current_plan",
 };
 
-export function DashboardPage() {
+export function DashboardPage({
+  requestedTab,
+  onRequestedTabConsumed,
+}: {
+  requestedTab?: string | null;
+  onRequestedTabConsumed?: () => void;
+} = {}) {
   const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [data, setData] = useState<PlanData | null>(null);
@@ -100,6 +108,7 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(false);
   const [deliveries, setDeliveries] = useState<DeliveryReport | null>(null);
   const [drift, setDrift] = useState<DeliveryDriftReport | null>(null);
+  const [materials, setMaterials] = useState<MaterialsReport | null>(null);
   // order_id -> raw priority (1 low … 10 high) from the day's snapshot.
   const [orderPriorities, setOrderPriorities] = useState<Record<string, number>>(
     {}
@@ -129,17 +138,18 @@ export function DashboardPage() {
   const [modifications, setModifications] = useState<PlanModifications | null>(
     null
   );
-  // Orders to pre-select on the Risks tab (from a Deliveries hand-off), plus a
-  // nonce so each hand-off re-triggers the selection even for the same orders.
-  const [preselectOrders, setPreselectOrders] = useState<string[]>([]);
-  const [preselectNonce, setPreselectNonce] = useState(0);
-
-  const goMitigateInRisks = useCallback((orderIds: string[]) => {
-    if (orderIds.length === 0) return;
-    setPreselectOrders(orderIds);
-    setPreselectNonce((n) => n + 1);
-    setTab("risks");
-  }, []);
+  // applied_at of the modification currently being re-applied, if any.
+  const [reapplyingMod, setReapplyingMod] = useState<string | null>(null);
+  // Whether an Orders-tab priority re-plan is running.
+  const [replanningOrders, setReplanningOrders] = useState(false);
+  // The scenario currently selected on the Scenarios tab (for its email).
+  const [selectedScenarioType, setSelectedScenarioType] = useState<string | null>(
+    null
+  );
+  // Planner status marker per risk id (open/acknowledged/mitigating/resolved),
+  // lifted here so the Risks-tab count badge reflects open risks and the
+  // markers survive tab switches. Reset whenever the day's plan reloads.
+  const [riskStatus, setRiskStatus] = useState<Record<string, RiskStatus>>({});
 
   const loadWeekly = useCallback(async (date: string, asOf?: string) => {
     setWeeklyLoading(true);
@@ -187,6 +197,8 @@ export function DashboardPage() {
   const loadResults = useCallback(async (date: string) => {
     setLoading(true);
     setModificationsLoading(true);
+    // A fresh plan load re-assesses risks, so clear planner status markers.
+    setRiskStatus({});
     try {
       const [schedule, kpis, risks, recommendations, scenarios] =
         await Promise.all([
@@ -199,6 +211,10 @@ export function DashboardPage() {
       setData({ schedule, kpis, risks, recommendations, scenarios });
       setStatus("");
       loadDeliveries(date);
+      api
+        .getMaterials(date)
+        .then(setMaterials)
+        .catch(() => setMaterials(null));
       // Load the snapshot to get a priority for every order (not just those in
       // the delivery horizon), so the Orders tab shows no blanks.
       api
@@ -241,6 +257,14 @@ export function DashboardPage() {
     if (selectedDate) loadResults(selectedDate);
   }, [selectedDate, loadResults]);
 
+  // Honour a tab requested from another page (e.g. "view materials" on Live Ops).
+  useEffect(() => {
+    if (requestedTab) {
+      setTab(requestedTab as Tab);
+      onRequestedTabConsumed?.();
+    }
+  }, [requestedTab, onRequestedTabConsumed]);
+
   // On a next-day plan, fall back to the plan overview if an assessment tab
   // (which is hidden) was active.
   useEffect(() => {
@@ -277,6 +301,67 @@ export function DashboardPage() {
       setStatus("Failed to run the pipeline.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onReplanPriorities(priorities: Record<string, number>) {
+    if (!selectedDate || replanningOrders) return;
+    const ids = Object.keys(priorities);
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `Re-plan ${selectedDate} with ${ids.length} changed ` +
+        `priorit${ids.length > 1 ? "ies" : "y"}?\n\n` +
+        "This re-solves the day so the schedule, KPIs, risks and deliveries " +
+        "reflect the new priorities."
+    );
+    if (!ok) return;
+    setReplanningOrders(true);
+    setStatus(`Re-planning ${selectedDate} with the new priorities…`);
+    try {
+      await api.replanPriorities(selectedDate, priorities, MITIGATE_MAX_SECONDS);
+      await loadResults(selectedDate);
+      setStatus(`Re-planned ${selectedDate} with the updated priorities.`);
+    } catch {
+      setStatus("Failed to re-plan with the new priorities.");
+    } finally {
+      setReplanningOrders(false);
+    }
+  }
+
+  async function onReapplyModification(m: PlanModification) {
+    if (!selectedDate || reapplyingMod) return;
+    const ok = window.confirm(
+      `Re-apply "${m.label}" to the current plan for ${selectedDate}?\n\n` +
+        "This re-solves the day with that change and recomputes KPIs, risks, " +
+        "deliveries and recommendations."
+    );
+    if (!ok) return;
+    setReapplyingMod(m.applied_at);
+    setStatus(`Re-applying "${m.label}" for ${selectedDate}…`);
+    try {
+      if (m.action === "RAISE_PRIORITY") {
+        const ids = m.targets.order_ids ?? [];
+        await api.mitigateOrderPriority(
+          selectedDate,
+          ids,
+          10,
+          MITIGATE_MAX_SECONDS
+        );
+      } else {
+        await api.applyRiskFix(
+          selectedDate,
+          m.action,
+          m.targets,
+          MITIGATE_MAX_SECONDS
+        );
+      }
+      await loadResults(selectedDate);
+      setStatus(`Re-applied "${m.label}" — see the before/after.`);
+      setTab("current");
+    } catch {
+      setStatus(`Failed to re-apply "${m.label}".`);
+    } finally {
+      setReapplyingMod(null);
     }
   }
 
@@ -456,6 +541,12 @@ export function DashboardPage() {
   );
 
   const today = todayIso();
+  // Risks still open (not marked resolved by the planner) — drives the badge.
+  const openRiskCount = data
+    ? data.risks.risks.filter(
+        (r) => (riskStatus[r.risk_id] ?? "open") !== "resolved"
+      ).length
+    : 0;
   // The selected day is a forward "next day plan" when it is beyond today.
   const isNextDayPlan = selectedDate > today;
   const dateOptions =
@@ -544,8 +635,8 @@ export function DashboardPage() {
                 onClick={() => setTab(t.id)}
               >
                 {t.label}
-                {t.id === "risks" && data.risks.risks.length > 0 && (
-                  <span className="tab-count">{data.risks.risks.length}</span>
+                {t.id === "risks" && openRiskCount > 0 && (
+                  <span className="tab-count">{openRiskCount}</span>
                 )}
               </button>
             ))}
@@ -570,7 +661,10 @@ export function DashboardPage() {
                 <ReportEmailButton
                   date={selectedDate}
                   reportType={REPORT_FOR_TAB[tab]}
-                  label="Email this tab"
+                  label="Send Email"
+                  scenarioType={
+                    tab === "scenarios" ? selectedScenarioType : null
+                  }
                 />
               </div>
             )}
@@ -587,7 +681,7 @@ export function DashboardPage() {
               />
             )}
             {tab === "gantt" && (
-              <GanttChart operations={ops} />
+              <GanttChart operations={ops} date={selectedDate} />
             )}
             {tab === "weekly" &&
               (weeklyLoading ? (
@@ -618,23 +712,16 @@ export function DashboardPage() {
               ) : (
                 <p className="empty">No progress data for this day.</p>
               ))}
-            {tab === "machines" && <MachineTimeline operations={ops} />}
+            {tab === "machines" && <MachineTimeline operations={ops} date={selectedDate} />}
             {tab === "orders" && (
-              <OrderTable operations={ops} priorities={orderPriorities} />
+              <OrdersPanel
+                operations={ops}
+                priorities={orderPriorities}
+                deliveries={deliveries}
+                onReplan={onReplanPriorities}
+                replanning={replanningOrders}
+              />
             )}
-            {tab === "deliveries" &&
-              (deliveriesLoading ? (
-                <PanelSkeleton />
-              ) : deliveries ? (
-                <DeliveriesPanel
-                  report={deliveries}
-                  onMitigateInRisks={goMitigateInRisks}
-                  onRaisePriority={(ids) => onMitigateRisk(ids, "deliveries")}
-                  mitigating={mitigatingRisk}
-                />
-              ) : (
-                <p className="empty">No delivery data for this day.</p>
-              ))}
             {tab === "drift" &&
               (deliveriesLoading ? (
                 <PanelSkeleton />
@@ -642,6 +729,12 @@ export function DashboardPage() {
                 <DeliveryDrift report={drift} />
               ) : (
                 <p className="empty">No drift data for this day.</p>
+              ))}
+            {tab === "materials" &&
+              (materials ? (
+                <MaterialsPanel report={materials} />
+              ) : (
+                <p className="empty">No materials data for this day.</p>
               ))}
             {tab === "risks" && (
               <RiskPanel
@@ -652,9 +745,8 @@ export function DashboardPage() {
                 onApplyFix={onApplyRiskFix}
                 onApplyAll={onApplyAllRiskFixes}
                 mitigating={mitigatingRisk}
-                preselectOrderIds={preselectOrders}
-                preselectNonce={preselectNonce}
-                onPreselectConsumed={() => setPreselectOrders([])}
+                status={riskStatus}
+                onStatusChange={setRiskStatus}
               />
             )}
             {tab === "scenarios" && (
@@ -662,13 +754,20 @@ export function DashboardPage() {
                 comparison={data.scenarios}
                 onApply={onApplyScenario}
                 applying={applyingScenario}
+                onSelect={setSelectedScenarioType}
               />
             )}
             {tab === "current" &&
               (modificationsLoading ? (
                 <PanelSkeleton />
               ) : modifications ? (
-                <CurrentPlanPanel data={modifications} onRevert={onRevertPlan} reverting={busy} />
+                <CurrentPlanPanel
+                  data={modifications}
+                  onRevert={onRevertPlan}
+                  reverting={busy}
+                  onReapply={onReapplyModification}
+                  reapplying={reapplyingMod}
+                />
               ) : (
                 <p className="empty">
                   No plan modification log yet. Run the planner to establish a

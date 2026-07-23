@@ -61,6 +61,19 @@ class MitigateOrdersRequest(BaseModel):
     )
 
 
+class ReplanPrioritiesRequest(BaseModel):
+    """Request body to set per-order priorities and re-solve the day once."""
+
+    priorities: dict[str, int] = Field(
+        ...,
+        min_length=1,
+        description="Map of order_id -> new priority (1 = lowest, 10 = highest).",
+    )
+    max_time_seconds: float | None = Field(
+        default=None, gt=0, description="Optional solver time budget override."
+    )
+
+
 class ApplyFixRequest(BaseModel):
     """Request body to apply a recommended fix action and re-solve the day."""
 
@@ -195,6 +208,10 @@ class EmailReportRequest(BaseModel):
     preview: bool = Field(
         default=False,
         description="When true, render and return the email without sending it.",
+    )
+    scenario_type: str | None = Field(
+        default=None,
+        description="For the scenarios report: which scenario to detail.",
     )
 
 

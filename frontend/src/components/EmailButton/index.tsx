@@ -126,6 +126,8 @@ interface Props {
   date: string;
   reportType: string;
   label?: string;
+  /** For the scenarios report: the scenario the email should detail. */
+  scenarioType?: string | null;
 }
 
 /** "Email" button that opens the preview-before-send modal for a tab. */
@@ -133,6 +135,7 @@ export function ReportEmailButton({
   date,
   reportType,
   label = "Email report",
+  scenarioType,
 }: Props) {
   const [open, setOpen] = useState(false);
 
@@ -157,6 +160,7 @@ export function ReportEmailButton({
               report_type: reportType,
               role: null,
               preview: true,
+              scenario_type: scenarioType ?? null,
             })
           }
           send={() =>
@@ -164,6 +168,7 @@ export function ReportEmailButton({
               report_type: reportType,
               role: null,
               preview: false,
+              scenario_type: scenarioType ?? null,
             })
           }
           onClose={() => setOpen(false)}

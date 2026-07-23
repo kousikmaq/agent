@@ -1024,6 +1024,114 @@ button.primary:hover:not(:disabled) {
   cursor: default;
 }
 
+/* Current-plan: pinned original plan cards + per-modification plan view */
+.original-plan-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.original-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.06);
+}
+.opc-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.opc-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+.opc-value-sm {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.rec-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mod-plan {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mod-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.mod-plan-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Merged Orders + Deliveries table */
+.orders-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.orders-prio-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.orders-prio-pick select {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+.orders-table .col-check {
+  width: 32px;
+  text-align: center;
+}
+.orders-table tbody tr.row-staged {
+  background: rgba(59, 130, 246, 0.1);
+}
+.staged-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  padding: 1px 5px;
+}
+.machines-cell {
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.materials-table .mat-name {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
 /* Risk selection + bulk actions */
 .risk-selectbar {
   display: flex;

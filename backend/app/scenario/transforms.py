@@ -71,11 +71,15 @@ def apply_overtime(state: FactoryState, params: dict[str, Any]) -> FactoryState:
 
 
 def apply_alternate_machines(state: FactoryState, params: dict[str, Any]) -> FactoryState:
-    """Alternate machines: return down machines to service as backups.
+    """Alternate machines: widen the usable machine pool with backups.
 
-    Clears DOWN statuses, drops unplanned breakdown maintenance, and ensures
-    every machine has an availability window - increasing the pool of usable
-    machines for the schedule.
+    Returns any down machines to service, clears unplanned breakdown
+    maintenance (assumed repaired), and brings **one backup machine per work
+    centre** online as an alternate. Each backup mirrors a representative
+    machine in its centre and is added to the eligibility of that centre's
+    operations, so the scheduler has genuinely more places to run work. This is
+    a milder capacity lever than Additional Shift (which duplicates every
+    machine), keeping the two scenarios distinct.
     """
     business_date = parse_business_date(state.business_date)
     start_time, end_time = _operating_window(state, business_date)
@@ -88,6 +92,50 @@ def apply_alternate_machines(state: FactoryState, params: dict[str, Any]) -> Fac
     state.machine_maintenance = [
         m for m in state.machine_maintenance if m.maintenance_type != MaintenanceType.BREAKDOWN
     ]
+
+    # Bring one backup machine per work centre online as an alternate.
+    representatives: dict[str, Machine] = {}
+    for machine in state.machines:
+        if machine.status != MachineStatus.DOWN:
+            representatives.setdefault(machine.work_center, machine)
+    backup_of_wc: dict[str, str] = {}
+    for work_center, rep in representatives.items():
+        backup_id = f"{rep.machine_id}-BK"
+        backup_of_wc[work_center] = backup_id
+        state.machines.append(
+            Machine(
+                machine_id=backup_id,
+                name=f"{rep.name} (Backup)",
+                work_center=work_center,
+                status=MachineStatus.AVAILABLE,
+                capacity_minutes_per_day=rep.capacity_minutes_per_day,
+                efficiency_factor=rep.efficiency_factor,
+            )
+        )
+        state.machine_availability.append(
+            MachineAvailability(
+                machine_id=backup_id,
+                day=business_date,
+                available_from=datetime.combine(business_date, start_time),
+                available_to=datetime.combine(business_date, end_time),
+            )
+        )
+
+    # Extend each operation's eligibility to its work centre's backup machine.
+    wc_of = {m.machine_id: m.work_center for m in state.machines}
+    for routing in state.routings:
+        for operation in routing.operations:
+            work_centers = {
+                wc_of.get(mid) for mid in operation.eligible_machine_ids
+            }
+            extra = [
+                backup_of_wc[wc] for wc in work_centers if wc in backup_of_wc
+            ]
+            if extra:
+                operation.eligible_machine_ids = [
+                    *operation.eligible_machine_ids,
+                    *extra,
+                ]
 
     machines_with_windows = {w.machine_id for w in state.machine_availability}
     for machine in state.machines:

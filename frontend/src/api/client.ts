@@ -17,6 +17,7 @@ import type {
   OrchestrationResult,
   PlaceOrderRequest,
   PlanModifications,
+  MaterialsReport,
   RecommendationSet,
   RiskReport,
   RolesResponse,
@@ -96,6 +97,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ order_ids, priority, max_time_seconds }),
     }),
+  replanPriorities: (
+    date: string,
+    priorities: Record<string, number>,
+    max_time_seconds?: number
+  ) =>
+    request<ScheduleResult>(`/risks/${date}/replan-priorities`, {
+      method: "POST",
+      body: JSON.stringify({ priorities, max_time_seconds }),
+    }),
   applyRiskFix: (
     date: string,
     action: string,
@@ -140,6 +150,9 @@ export const api = {
     request<DeliveryDriftReport>(`/deliveries/${date}/drift?horizon_days=${horizon}`),
   getShopFloor: (date: string) =>
     request<ShopFloorStatus>(`/shopfloor/${date}`),
+
+  getMaterials: (date: string) =>
+    request<MaterialsReport>(`/materials/${date}`),
 
   getWeeklyPlan: (date: string, asOf?: string) =>
     request<WeeklyPlanReport>(

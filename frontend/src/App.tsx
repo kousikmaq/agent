@@ -55,6 +55,8 @@ function UserMenu() {
 /** Authenticated application shell (nav + pages). */
 function Workspace() {
   const [page, setPage] = useState<Page>("planning");
+  // A tab to open on the planning page (e.g. from a Live Ops "view materials").
+  const [planningTab, setPlanningTab] = useState<string | null>(null);
 
   return (
     <div className="shell">
@@ -76,7 +78,19 @@ function Workspace() {
         </div>
         <UserMenu />
       </nav>
-      {page === "planning" ? <DashboardPage /> : <ShopFloorPage />}
+      {page === "planning" ? (
+        <DashboardPage
+          requestedTab={planningTab}
+          onRequestedTabConsumed={() => setPlanningTab(null)}
+        />
+      ) : (
+        <ShopFloorPage
+          onViewMaterials={() => {
+            setPlanningTab("materials");
+            setPage("planning");
+          }}
+        />
+      )}
       <Toaster />
     </div>
   );

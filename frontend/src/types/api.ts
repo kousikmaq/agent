@@ -145,6 +145,7 @@ export interface EmailReportRequest {
   role?: string | null;
   to?: string | null;
   preview?: boolean;
+  scenario_type?: string | null;
 }
 
 export interface RolesResponse {
@@ -312,6 +313,27 @@ export interface MaterialShortLine {
   safety_stock: number;
   reorder_point: number;
   below_safety: boolean;
+}
+
+export interface MaterialLine {
+  product_id: string;
+  name: string | null;
+  on_hand: number;
+  allocated: number;
+  net_available: number;
+  safety_stock: number;
+  reorder_point: number;
+  shortage: number;
+  below_reorder: boolean;
+  below_safety: boolean;
+}
+
+export interface MaterialsReport {
+  business_date: string;
+  total: number;
+  below_reorder: number;
+  below_safety: number;
+  lines: MaterialLine[];
 }
 
 export interface ShopFloorStatus {

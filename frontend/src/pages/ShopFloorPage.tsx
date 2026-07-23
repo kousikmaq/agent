@@ -7,7 +7,11 @@ import { PanelSkeleton } from "../components/Skeleton";
 import { datesUpToToday } from "../utils/format";
 
 /** Shop-floor monitoring page: live status of machines, workers, orders, materials. */
-export function ShopFloorPage() {
+export function ShopFloorPage({
+  onViewMaterials,
+}: {
+  onViewMaterials?: () => void;
+} = {}) {
   const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [status, setStatus] = useState<ShopFloorStatus | null>(null);
@@ -83,14 +87,14 @@ export function ShopFloorPage() {
             <ReportEmailButton
               date={selectedDate}
               reportType="live_ops"
-              label="Email status"
+              label="Send Email"
             />
           </div>
         )}
         {busy ? (
           <PanelSkeleton />
         ) : status ? (
-          <ShopFloorBoard status={status} risks={risks} />
+          <ShopFloorBoard status={status} risks={risks} onViewMaterials={onViewMaterials} />
         ) : (
           <p className="empty">Select a day to see shop-floor status.</p>
         )}

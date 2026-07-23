@@ -5,6 +5,8 @@ import { colourFor } from "../../utils/colors";
 
 interface Props {
   operations: ScheduledOperation[];
+  /** When set, only operations that start on this business day are shown. */
+  date?: string;
 }
 
 /**
@@ -12,19 +14,24 @@ interface Props {
  * loading and idle gaps across the schedule span. Click a machine to focus on
  * just its row (others dim out).
  */
-export function MachineTimeline({ operations }: Props) {
+export function MachineTimeline({ operations, date }: Props) {
   const [focus, setFocus] = useState<string | null>(null);
 
   const { rows, min, span, ticks } = useMemo(() => {
-    if (operations.length === 0)
+    // Show only the selected business day's operations (the solver schedules the
+    // full backlog, which can spill into later days).
+    const dayOps = date
+      ? operations.filter((o) => o.start.slice(0, 10) === date)
+      : operations;
+    if (dayOps.length === 0)
       return { rows: [], min: 0, span: 1, ticks: [] };
-    const starts = operations.map((o) => new Date(o.start).getTime());
-    const ends = operations.map((o) => new Date(o.end).getTime());
+    const starts = dayOps.map((o) => new Date(o.start).getTime());
+    const ends = dayOps.map((o) => new Date(o.end).getTime());
     const minT = Math.min(...starts);
     const maxT = Math.max(...ends);
     const spanT = Math.max(1, maxT - minT);
     const grouped = new Map<string, ScheduledOperation[]>();
-    for (const op of operations) {
+    for (const op of dayOps) {
       const list = grouped.get(op.machine_id) ?? [];
       list.push(op);
       grouped.set(op.machine_id, list);
@@ -60,10 +67,10 @@ export function MachineTimeline({ operations }: Props) {
       });
     }
     return { rows, min: minT, span: spanT, ticks };
-  }, [operations]);
+  }, [operations, date]);
 
-  if (operations.length === 0) {
-    return <p className="empty">No scheduled operations.</p>;
+  if (rows.length === 0) {
+    return <p className="empty">No scheduled operations for this day.</p>;
   }
 
   // Filter/legend is by ORDER (bars are coloured by order). Clicking an order

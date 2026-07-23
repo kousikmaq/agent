@@ -14,6 +14,7 @@ from app.api.v1.routes_chat import router as chat_router
 from app.api.v1.routes_data import router as data_router
 from app.api.v1.routes_deliveries import router as deliveries_router
 from app.api.v1.routes_health import router as health_router
+from app.api.v1.routes_materials import router as materials_router
 from app.api.v1.routes_orchestrate import router as orchestrate_router
 from app.api.v1.routes_recommendations import router as recommendations_router
 from app.api.v1.routes_risks import router as risks_router
@@ -31,6 +32,7 @@ api_router.include_router(analytics_router)
 api_router.include_router(deliveries_router)
 api_router.include_router(weekly_router)
 api_router.include_router(shopfloor_router)
+api_router.include_router(materials_router)
 api_router.include_router(risks_router)
 api_router.include_router(recommendations_router)
 api_router.include_router(scenarios_router)

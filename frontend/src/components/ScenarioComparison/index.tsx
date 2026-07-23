@@ -6,6 +6,8 @@ interface Props {
   comparison: Comparison;
   onApply?: (scenarioType: string, name: string) => void;
   applying?: string | null;
+  /** Notifies the parent which scenario is selected (for the email report). */
+  onSelect?: (scenarioType: string) => void;
 }
 
 const fmtCount = (v: number) => String(Math.round(v));
@@ -104,7 +106,7 @@ function DeltaChip({
  * each what-if plan, where the planner can review full details and choose the
  * plan that best fits.
  */
-export function ScenarioComparison({ comparison, onApply, applying }: Props) {
+export function ScenarioComparison({ comparison, onApply, applying, onSelect }: Props) {
   const baselineName =
     comparison.results.find((r) => r.is_baseline)?.name ?? null;
 
@@ -134,6 +136,11 @@ export function ScenarioComparison({ comparison, onApply, applying }: Props) {
     comparison.results.find((r) => r.name === selectedName) ??
     comparison.results[0] ??
     null;
+
+  // Tell the parent which scenario is selected (drives the email report).
+  useEffect(() => {
+    if (selected) onSelect?.(selected.scenario_type);
+  }, [selected, onSelect]);
 
   const applyDisabled = applying !== null && applying !== undefined;
 

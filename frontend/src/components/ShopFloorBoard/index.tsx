@@ -5,6 +5,8 @@ import { RiskPanel } from "../RiskPanel";
 interface Props {
   status: ShopFloorStatus;
   risks?: RiskReport | null;
+  /** Redirect to the Materials tab on the planning page. */
+  onViewMaterials?: () => void;
 }
 
 type DetailKey = "machines" | "workers" | "orders" | "materials" | "risks";
@@ -49,8 +51,8 @@ function StatCard({
 }
 
 /** Live shop-floor status: machines, workers, orders, materials, risks. */
-export function ShopFloorBoard({ status, risks }: Props) {
-  const [detail, setDetail] = useState<DetailKey>("risks");
+export function ShopFloorBoard({ status, risks, onViewMaterials }: Props) {
+  const [detail, setDetail] = useState<DetailKey>("machines");
 
   return (
     <div className="floor">
@@ -96,7 +98,9 @@ export function ShopFloorBoard({ status, risks }: Props) {
           title="Materials"
           active={detail === "materials"}
           hint="View materials running low"
-          onClick={() => setDetail("materials")}
+          onClick={() =>
+            onViewMaterials ? onViewMaterials() : setDetail("materials")
+          }
           stats={[
             { label: "Below reorder", value: status.materials_below_reorder, tone: "warn" },
             { label: "Below safety", value: status.materials_below_safety, tone: "bad" },

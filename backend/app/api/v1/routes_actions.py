@@ -11,11 +11,16 @@ it (subject + HTML) without sending, powering the preview-before-send modal.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.v1.deps import get_email_service, get_results_store
+from app.analytics.deliveries import build_delivery_drift, build_delivery_report
+from app.analytics.materials import build_materials_report
+from app.analytics.shopfloor import build_shopfloor_status
+from app.analytics.weekly import build_weekly_plan
+from app.api.v1.deps import get_data_source, get_email_service, get_results_store
 from app.api.v1.schemas import (
     EmailActionResponse,
     EmailPreviewResponse,
@@ -24,7 +29,8 @@ from app.api.v1.schemas import (
     PlaceOrderRequest,
     RolesResponse,
 )
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import DataIngestionError, NotFoundError
+from app.ingestion import CsvDataSource
 from app.notifications import (
     ROLES,
     EmailService,
@@ -33,6 +39,7 @@ from app.notifications import (
     render_risk_email,
 )
 from app.services import ResultsStore
+from app.utils.datetime_utils import parse_business_date
 
 router = APIRouter(prefix="/actions", tags=["actions"])
 
@@ -63,6 +70,64 @@ def _dispatch(
     )
 
 
+def _build_report_context(
+    report_type: str,
+    business_date: str,
+    request: EmailReportRequest,
+    store: ResultsStore,
+    source: CsvDataSource,
+) -> dict:
+    """Load the extra per-tab data a report needs beyond the summary + KPIs."""
+    ctx: dict = {}
+    if request.scenario_type:
+        ctx["scenario_type"] = request.scenario_type
+
+    def _state():
+        try:
+            return source.load(business_date)
+        except DataIngestionError:
+            return None
+
+    schedule = store.load_schedule(business_date)
+
+    if report_type in ("weekly", "daily_progress"):
+        state = _state()
+        if state is not None and schedule is not None:
+            ctx["weekly"] = build_weekly_plan(state, schedule, as_of=business_date)
+    elif report_type in ("orders", "deliveries", "drift"):
+        state = _state()
+        if state is not None and schedule is not None:
+            current = build_delivery_report(state, schedule)
+            ctx["deliveries"] = current
+            if report_type == "drift":
+                anchor = parse_business_date(business_date)
+                for back in range(1, 8):
+                    prev_date = (anchor - timedelta(days=back)).isoformat()
+                    prev_schedule = store.load_schedule(prev_date)
+                    if prev_schedule is None:
+                        continue
+                    try:
+                        prev_state = source.load(prev_date)
+                    except DataIngestionError:
+                        continue
+                    prev = build_delivery_report(prev_state, prev_schedule)
+                    ctx["drift"] = build_delivery_drift(current, prev)
+                    break
+    elif report_type == "materials":
+        state = _state()
+        if state is not None:
+            ctx["materials"] = build_materials_report(state)
+    elif report_type == "current_plan":
+        ctx["modifications"] = store.load_modifications(business_date)
+    elif report_type == "live_ops":
+        state = _state()
+        if state is not None:
+            # Live-ops email deliberately excludes the risk section.
+            ctx["shopfloor"] = build_shopfloor_status(state, None)
+
+    return ctx
+
+
 @router.post(
     "/{business_date}/email-report",
     response_model=EmailActionResponse | EmailPreviewResponse,
@@ -73,6 +138,7 @@ async def email_report(
     request: EmailReportRequest,
     store: Annotated[ResultsStore, Depends(get_results_store)],
     email: Annotated[EmailService, Depends(get_email_service)],
+    source: Annotated[CsvDataSource, Depends(get_data_source)],
 ) -> EmailActionResponse | EmailPreviewResponse:
     """Compose and send (or preview) a professional report email for a tab."""
     summary = store.load_summary(business_date)
@@ -82,8 +148,16 @@ async def email_report(
             f"No results for {business_date}; run the pipeline first.",
             details={"business_date": business_date},
         )
+    context = _build_report_context(
+        request.report_type, business_date, request, store, source
+    )
     subject, html, text = render_report_email(
-        request.report_type, business_date, summary, kpis, role=request.role
+        request.report_type,
+        business_date,
+        summary,
+        kpis,
+        role=request.role,
+        context=context,
     )
     return _dispatch(
         email, subject, html, text, to=request.to, preview=request.preview

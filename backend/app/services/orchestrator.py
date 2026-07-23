@@ -443,6 +443,61 @@ class PlanningOrchestrator:
             business_date, modified, policy, options, [entry]
         )
 
+    def apply_order_priorities(
+        self,
+        business_date: str,
+        priorities: dict[str, int],
+        options: SolverOptions | None = None,
+    ) -> PlanningResult:
+        """Set explicit per-order priorities and re-solve the day once.
+
+        Unlike :meth:`apply_order_priority` (which raises a set of orders to a
+        single level), this assigns each order its own target priority (clamped
+        1–10), so a planner can raise some orders and lower others in a single
+        re-plan. Re-runs the full deterministic pipeline and persists the
+        result — replacing the committed plan.
+        """
+        options = options or self._default_options
+        state = self._loader.load(business_date)
+
+        target_ids = set(priorities)
+        present = {
+            o.order_id for o in state.production_orders if o.order_id in target_ids
+        }
+        missing = target_ids - present
+        if missing:
+            raise NotFoundError(
+                f"Orders not found for {business_date}: {sorted(missing)}.",
+                details={"order_ids": sorted(missing)},
+            )
+
+        clamped = {oid: max(1, min(10, p)) for oid, p in priorities.items()}
+        updated_orders = [
+            o.model_copy(update={"priority": clamped[o.order_id]})
+            if o.order_id in clamped
+            else o
+            for o in state.production_orders
+        ]
+        modified = state.model_copy(update={"production_orders": updated_orders})
+
+        logger.info(
+            "Setting per-order priorities %s on %s and re-solving.",
+            {k: clamped[k] for k in sorted(clamped)},
+            business_date,
+        )
+        policy = self._rules.evaluate(modified)
+        ids = sorted(clamped)
+        entry = PlanModification(
+            label=f"Changed priority of {len(ids)} order(s): "
+            + ", ".join(f"{oid}→{clamped[oid]}" for oid in ids),
+            action="RAISE_PRIORITY",
+            applied_at=datetime.now().isoformat(timespec="seconds"),
+            targets={"order_ids": ids},
+        )
+        return self._finalize_replan(
+            business_date, modified, policy, options, [entry]
+        )
+
     def apply_recommendation_action(
         self,
         business_date: str,

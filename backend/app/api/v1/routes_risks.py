@@ -11,6 +11,7 @@ from app.api.v1.schemas import (
     ApplyFixesRequest,
     ApplyFixRequest,
     MitigateOrdersRequest,
+    ReplanPrioritiesRequest,
 )
 from app.core.exceptions import NotFoundError
 from app.domain.models.modifications import PlanModifications
@@ -79,6 +80,33 @@ async def mitigate_priority(
         )
     result = orchestrator.apply_order_priority(
         business_date, request.order_ids, request.priority, options
+    )
+    return result.schedule
+
+
+@router.post(
+    "/{business_date}/replan-priorities",
+    response_model=ScheduleResult,
+    summary="Set per-order priorities and re-solve the day",
+)
+async def replan_priorities(
+    business_date: str,
+    request: ReplanPrioritiesRequest,
+    orchestrator: Annotated[PlanningOrchestrator, Depends(get_orchestrator)],
+) -> ScheduleResult:
+    """Assign each order its own priority and re-solve the day once.
+
+    Lets a planner raise some orders and lower others in a single re-plan;
+    persists the new plan (replacing the previous one) and recomputes the
+    downstream artifacts against it.
+    """
+    options = None
+    if request.max_time_seconds is not None:
+        options = SolverOptions.from_settings().model_copy(
+            update={"max_time_seconds": request.max_time_seconds}
+        )
+    result = orchestrator.apply_order_priorities(
+        business_date, request.priorities, options
     )
     return result.schedule
 
