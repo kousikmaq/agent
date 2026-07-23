@@ -1,15 +1,10 @@
 import { useMemo, useState } from "react";
 import type { ScheduledOperation } from "../../types/api";
 import { fmtDateTime, durationMinutes } from "../../utils/format";
+import { colourFor } from "../../utils/colors";
 
 interface Props {
   operations: ScheduledOperation[];
-}
-
-function colourFor(key: string): string {
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) % 360;
-  return `hsl(${hash}, 62%, 55%)`;
 }
 
 /**
