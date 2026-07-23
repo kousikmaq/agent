@@ -21,7 +21,17 @@ class SolverOptions(BaseModel):
     )
     random_seed: int = Field(default=42, description="Fixed seed for reproducibility.")
     num_search_workers: int = Field(
-        default=8, ge=1, description="Parallel search workers (fixed for reproducibility)."
+        default=8,
+        ge=1,
+        description=(
+            "CP-SAT parallel search workers. Kept at 8 because a single worker "
+            "cannot find a feasible schedule for the full problem within the "
+            "time budget. Parallel search is not bit-for-bit reproducible, so "
+            "the Scenarios comparison keeps the committed plan and top KPI bar "
+            "in sync by *reusing* the committed solve for the applied scenario's "
+            "row (see ScenarioPlanningEngine.plan's ``injected`` argument) rather "
+            "than relying on a re-solve matching."
+        ),
     )
 
     # --- Feature toggles (each maps to a modular constraint family) ---

@@ -211,7 +211,7 @@ class PlanningOrchestrator:
         risks = self._risk.detect(state, schedule, kpis)
         recommendations = self._recommendation.recommend(state, schedule, risks)
         scenario_comparison = ScenarioPlanningEngine(options=options).plan(
-            state, policy, baseline_kpis=kpis
+            state, policy, injected={ScenarioType.CURRENT_PLAN: kpis}
         )
 
         context = self._explanation.build(
@@ -356,8 +356,12 @@ class PlanningOrchestrator:
         kpis = self._analytics.compute(transformed, schedule)
         risks = self._risk.detect(transformed, schedule, kpis)
         recommendations = self._recommendation.recommend(transformed, schedule, risks)
+        # The comparison is always solved from the day's ORIGINAL dataset state
+        # (never the transformed state) so applying a scenario does not compound
+        # the change on top of itself. The applied scenario's own row reuses the
+        # committed KPIs so the Scenarios tab matches the top bar exactly.
         scenario_comparison = ScenarioPlanningEngine(options=options).plan(
-            transformed, policy, baseline_kpis=kpis
+            state, policy, injected={scenario_type: kpis}
         )
 
         context = self._explanation.build(

@@ -54,35 +54,41 @@ class ScenarioPlanningEngine:
         self,
         state: FactoryState,
         policy: RulePolicy,
-        baseline_kpis: KpiSet | None = None,
+        injected: dict[ScenarioType, KpiSet] | None = None,
     ) -> ScenarioComparison:
         """Solve and compare every scenario, returning the comparison.
 
-        When ``baseline_kpis`` is supplied, the baseline ("Current Plan")
-        scenario reuses those KPIs verbatim instead of re-solving the state.
-        This keeps the Scenarios tab's baseline identical to the committed
-        plan's KPIs (top bar, Overview, assistant); re-solving the baseline
-        independently can diverge because the CP-SAT solver runs with several
-        parallel workers and is not bit-for-bit reproducible across runs.
+        ``state`` must always be the day's *original* dataset state so the
+        comparison is stable and never compounds a previously applied scenario
+        on top of itself.
+
+        For any scenario whose type appears in ``injected``, that scenario's
+        row reuses the supplied KPIs verbatim instead of re-solving. This lets
+        the committed plan (top KPI bar, Overview, assistant) share the exact
+        same numbers as its row in the Scenarios tab -- the CP-SAT solver runs
+        several parallel workers and is not bit-for-bit reproducible, so a
+        separate re-solve of the same state can otherwise diverge.
         """
+        injected = injected or {}
         results: list[ScenarioResult] = []
         baseline_result: ScenarioResult | None = None
         baseline_type = ScenarioType.CURRENT_PLAN
 
         for spec in self._scenarios:
-            if spec.is_baseline and baseline_kpis is not None:
+            scenario_type = spec.definition.scenario_type
+            if scenario_type in injected:
                 result = ScenarioResult(
-                    scenario_type=spec.definition.scenario_type,
+                    scenario_type=scenario_type,
                     name=spec.definition.name,
-                    kpis=extract_scenario_kpis(baseline_kpis),
-                    is_baseline=True,
+                    kpis=extract_scenario_kpis(injected[scenario_type]),
+                    is_baseline=spec.is_baseline,
                 )
             else:
                 result = self._run_scenario(state, policy, spec)
             results.append(result)
             if spec.is_baseline:
                 baseline_result = result
-                baseline_type = spec.definition.scenario_type
+                baseline_type = scenario_type
 
         # Fall back to the first result as baseline if none flagged.
         if baseline_result is None and results:

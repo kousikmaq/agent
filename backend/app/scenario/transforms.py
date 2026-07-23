@@ -43,15 +43,30 @@ def apply_current_plan(state: FactoryState, params: dict[str, Any]) -> FactorySt
 
 
 def apply_overtime(state: FactoryState, params: dict[str, Any]) -> FactoryState:
-    """Overtime enabled: bring machine availability forward to the start of day.
+    """Overtime enabled: extend labour coverage so machines run longer.
 
-    Extending the working window earlier lets operations begin sooner (the
-    earliest-start lever the solver enforces), and enables worker overtime.
+    Three solver-visible levers realise the extra working hours:
+
+    * machine availability is brought forward to the start of day, so
+      operations can begin earlier (the earliest-start lever);
+    * every worker is flagged as overtime-eligible (used by the cost model and
+      recommendations); and
+    * planned *preventive* maintenance is deferred out of the horizon, because
+      the extra staffing keeps machines running through what would otherwise be
+      planned downtime. This frees genuine machine capacity that the scheduler
+      can use, which is what distinguishes overtime from the baseline. (Breakdown
+      maintenance is left untouched -- returning down machines to service is the
+      Alternate Machines scenario, not this one.)
     """
     for window in state.machine_availability:
         window.available_from = datetime.combine(window.day, time(0, 0))
     for worker in state.workers:
         worker.overtime_allowed = True
+    state.machine_maintenance = [
+        m
+        for m in state.machine_maintenance
+        if m.maintenance_type != MaintenanceType.PREVENTIVE
+    ]
     return state
 
 
