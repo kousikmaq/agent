@@ -4,9 +4,13 @@ import { fmtDateTime } from "../../utils/format";
 
 interface Props {
   operations: ScheduledOperation[];
-  /** order_id → priority (1 low … 10 high), e.g. from the delivery report. */
+  /** order_id → raw priority (1 low … 10 high) from the day's snapshot. */
   priorities?: Record<string, number>;
 }
+
+// Backend priority is 1..10 (10 = highest). We show it on a 0-based scale where
+// 0 = highest priority (per product decision), i.e. display = MAX - raw.
+const MAX_PRIORITY = 10;
 
 interface OrderRow {
   order_id: string;
@@ -22,7 +26,8 @@ type SortDir = "asc" | "desc";
 
 function priorityBadge(p: number | null) {
   if (p === null) return <span className="prio-badge prio-low">—</span>;
-  const cls = p >= 8 ? "prio-high" : p >= 4 ? "prio-med" : "prio-low";
+  // p is the 0-based display priority: 0 = highest/most urgent → red.
+  const cls = p <= 2 ? "prio-high" : p <= 5 ? "prio-med" : "prio-low";
   return <span className={`prio-badge ${cls}`}>{p}</span>;
 }
 
@@ -44,10 +49,11 @@ export function OrderTable({ operations, priorities }: Props) {
       const sorted = [...ops].sort(
         (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
       );
+      const raw = priorities?.[order_id];
       return {
         order_id,
         operations: ops.length,
-        priority: priorities?.[order_id] ?? null,
+        priority: raw != null ? MAX_PRIORITY - raw : null,
         start: sorted[0].start,
         end: sorted[sorted.length - 1].end,
         machines: Array.from(new Set(ops.map((o) => o.machine_id))).sort(),
@@ -67,7 +73,7 @@ export function OrderTable({ operations, priorities }: Props) {
           cmp = a.operations - b.operations;
           break;
         case "priority":
-          cmp = (a.priority ?? -1) - (b.priority ?? -1);
+          cmp = (a.priority ?? 999) - (b.priority ?? 999);
           break;
         case "start":
           cmp = new Date(a.start).getTime() - new Date(b.start).getTime();
@@ -106,29 +112,42 @@ export function OrderTable({ operations, priorities }: Props) {
   );
 
   return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          {header("order_id", "Order")}
-          {header("priority", "Priority")}
-          {header("operations", "Ops")}
-          {header("start", "Start")}
-          {header("end", "End")}
-          <th>Machines</th>
-        </tr>
-      </thead>
-      <tbody>
-        {sorted.map((r) => (
-          <tr key={r.order_id}>
-            <td>{r.order_id}</td>
-            <td>{priorityBadge(r.priority)}</td>
-            <td>{r.operations}</td>
-            <td>{fmtDateTime(r.start)}</td>
-            <td>{fmtDateTime(r.end)}</td>
-            <td>{r.machines.join(", ")}</td>
+    <div>
+      <p className="table-hint">
+        <span className="prio-badge prio-high">0</span> = highest priority (most
+        urgent); higher numbers mean lower priority.
+      </p>
+      <table className="data-table">
+        <thead>
+          <tr>
+            {header("order_id", "Order")}
+            <th
+              className="sortable"
+              onClick={() => onSort("priority")}
+              title="Sort by priority (0 = highest)"
+            >
+              Priority
+              {caret("priority")}
+            </th>
+            {header("operations", "Ops")}
+            {header("start", "Start")}
+            {header("end", "End")}
+            <th>Machines</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {sorted.map((r) => (
+            <tr key={r.order_id}>
+              <td>{r.order_id}</td>
+              <td>{priorityBadge(r.priority)}</td>
+              <td>{r.operations}</td>
+              <td>{fmtDateTime(r.start)}</td>
+              <td>{fmtDateTime(r.end)}</td>
+              <td>{r.machines.join(", ")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

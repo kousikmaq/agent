@@ -216,10 +216,20 @@ export interface GenerateDataResponse {
   change_events: number;
 }
 
+/** A production order as carried in the factory snapshot (fields the UI reads). */
+export interface ProductionOrder {
+  order_id: string;
+  product_id: string;
+  priority: number;
+  due_date: string;
+  status: string;
+  [key: string]: unknown;
+}
+
 /** Loosely typed factory snapshot (only fields the UI reads). */
 export interface FactorySnapshot {
   business_date: string;
-  production_orders: unknown[];
+  production_orders: ProductionOrder[];
   machines: unknown[];
   workers: unknown[];
   [key: string]: unknown;

@@ -100,6 +100,10 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(false);
   const [deliveries, setDeliveries] = useState<DeliveryReport | null>(null);
   const [drift, setDrift] = useState<DeliveryDriftReport | null>(null);
+  // order_id -> raw priority (1 low … 10 high) from the day's snapshot.
+  const [orderPriorities, setOrderPriorities] = useState<Record<string, number>>(
+    {}
+  );
   const [weekly, setWeekly] = useState<WeeklyPlanReport | null>(null);
   const [weeklyAsOf, setWeeklyAsOf] = useState<string>("");
   // A generated future day (> today): a forward plan with no actuals yet.
@@ -184,6 +188,18 @@ export function DashboardPage() {
       setData({ schedule, kpis, risks, recommendations, scenarios });
       setStatus("");
       loadDeliveries(date);
+      // Load the snapshot to get a priority for every order (not just those in
+      // the delivery horizon), so the Orders tab shows no blanks.
+      api
+        .getSnapshot(date)
+        .then((snap) => {
+          const map: Record<string, number> = {};
+          for (const order of snap.production_orders) {
+            map[order.order_id] = order.priority;
+          }
+          setOrderPriorities(map);
+        })
+        .catch(() => setOrderPriorities({}));
       api
         .getModifications(date)
         .then(setModifications)
@@ -198,6 +214,7 @@ export function DashboardPage() {
       setDeliveries(null);
       setDrift(null);
       setWeekly(null);
+      setOrderPriorities({});
       if (err instanceof ApiError && err.status === 404) {
         setStatus("No results yet for this day. Run the planner.");
       } else {
@@ -587,12 +604,7 @@ export function DashboardPage() {
               ))}
             {tab === "machines" && <MachineTimeline operations={ops} />}
             {tab === "orders" && (
-              <OrderTable
-                operations={ops}
-                priorities={Object.fromEntries(
-                  (deliveries?.lines ?? []).map((l) => [l.order_id, l.priority])
-                )}
-              />
+              <OrderTable operations={ops} priorities={orderPriorities} />
             )}
             {tab === "deliveries" &&
               (deliveries ? (
