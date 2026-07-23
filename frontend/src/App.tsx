@@ -33,7 +33,6 @@ function UserMenu() {
     <div className="user-menu" ref={ref}>
       <button className="user-chip" onClick={() => setOpen((o) => !o)}>
         <span className="user-avatar">{initials}</span>
-        <span className="user-name">{user.name}</span>
         <span className="user-caret" aria-hidden>
           ▾
         </span>
