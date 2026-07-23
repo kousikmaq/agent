@@ -440,14 +440,14 @@ export function DashboardPage() {
     }
   }
 
-  // Show only the selected business day's operations in the day views (Gantt,
-  // Machines, Orders, Overview). The solver plans the whole backlog, which can
-  // span several days; only the Weekly Plan tab is week-wide.
-  const ops = useMemo(() => {
-    const all = data?.schedule.scheduled_operations ?? [];
-    const day = data?.schedule.business_date;
-    return day ? all.filter((o) => o.start.slice(0, 10) === day) : all;
-  }, [data]);
+  // The full committed plan for the day (the solver plans the whole backlog,
+  // which can span several days). The Gantt, Machines, Orders and Overview views
+  // all show this complete plan so they stay in sync with the KPIs, risks,
+  // deliveries and the assistant, which are all computed over the whole plan.
+  const ops = useMemo(
+    () => data?.schedule.scheduled_operations ?? [],
+    [data]
+  );
 
   // Schedule scoped to the selected day for the Overview summary.
   const daySchedule = useMemo(
@@ -587,7 +587,7 @@ export function DashboardPage() {
               />
             )}
             {tab === "gantt" && (
-              <GanttChart operations={ops} date={data.schedule.business_date} />
+              <GanttChart operations={ops} />
             )}
             {tab === "weekly" &&
               (weeklyLoading ? (
