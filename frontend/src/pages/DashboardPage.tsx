@@ -665,7 +665,10 @@ export function DashboardPage() {
       {!assistantOpen && (
         <button
           className="assistant-toggle chat-fab"
-          onClick={() => setAssistantOpen(true)}
+          onClick={() => {
+            setAssistantSeed(null);
+            setAssistantOpen(true);
+          }}
           title="Ask the assistant"
         >
           <span className="fab-spark" aria-hidden>

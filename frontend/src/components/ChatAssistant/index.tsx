@@ -166,9 +166,13 @@ export function ChatAssistant({ businessDate, onClose, seed }: Props) {
   }
 
   // Auto-ask a seeded question (e.g. from an "Ask AI" button on a chart).
+  // A new seed starts a fresh conversation before asking.
   useEffect(() => {
     if (seed && seed.nonce !== lastSeed.current) {
       lastSeed.current = seed.nonce;
+      setMessages([]);
+      setInput("");
+      setShowSuggestions(false);
       send(seed.text);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
