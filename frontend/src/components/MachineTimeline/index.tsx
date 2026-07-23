@@ -19,7 +19,6 @@ function colourFor(key: string): string {
  */
 export function MachineTimeline({ operations }: Props) {
   const [focus, setFocus] = useState<string | null>(null);
-  const [hovered, setHovered] = useState<ScheduledOperation | null>(null);
 
   const { rows, min, span, ticks } = useMemo(() => {
     if (operations.length === 0)
@@ -133,10 +132,12 @@ export function MachineTimeline({ operations }: Props) {
                         width: `${width}%`,
                         backgroundColor: colourFor(op.order_id),
                       }}
-                      onMouseEnter={() => setHovered(op)}
-                      onMouseLeave={() =>
-                        setHovered((cur) => (cur === op ? null : cur))
-                      }
+                      title={`${op.order_id} · ${op.operation_id}\n${fmtDateTime(
+                        op.start
+                      )} → ${fmtDateTime(op.end)} (${durationMinutes(
+                        op.start,
+                        op.end
+                      )}m)`}
                     >
                       <span className="gantt-bar-text">{op.order_id}</span>
                     </div>
@@ -149,14 +150,7 @@ export function MachineTimeline({ operations }: Props) {
       </div>
 
       <div className="gantt-explain">
-        {hovered ? (
-          <span>
-            <strong>{hovered.machine_id}</strong> runs{" "}
-            <strong>{hovered.order_id}</strong> ({hovered.operation_id}) ·{" "}
-            {fmtDateTime(hovered.start)} → {fmtDateTime(hovered.end)} (
-            {durationMinutes(hovered.start, hovered.end)}m).
-          </span>
-        ) : focus ? (
+        {focus ? (
           <span>
             Showing only <strong>{focus}</strong>: {focusRow?.[1].length ?? 0}{" "}
             operation(s), about {Math.round(focusMinutes)} minutes of work.

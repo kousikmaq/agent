@@ -30,7 +30,7 @@ function priorityBadge(p: number | null) {
 export function OrderTable({ operations, priorities }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
     key: "priority",
-    dir: "desc",
+    dir: "asc",
   });
 
   const rows = useMemo<OrderRow[]>(() => {
@@ -88,7 +88,7 @@ export function OrderTable({ operations, priorities }: Props) {
     setSort((cur) =>
       cur.key === key
         ? { key, dir: cur.dir === "asc" ? "desc" : "asc" }
-        : { key, dir: key === "priority" ? "desc" : "asc" }
+        : { key, dir: "asc" }
     );
 
   const caret = (key: SortKey) =>

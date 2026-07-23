@@ -23,7 +23,6 @@ function colourFor(key: string): string {
  */
 export function GanttChart({ operations, date }: Props) {
   const [focus, setFocus] = useState<string | null>(null);
-  const [hovered, setHovered] = useState<ScheduledOperation | null>(null);
 
   const { rows, min, span, ticks, machines } = useMemo(() => {
     // Show only the selected business day's operations (the solver schedules the
@@ -162,10 +161,11 @@ export function GanttChart({ operations, date }: Props) {
                         width: `${width}%`,
                         backgroundColor: colourFor(op.machine_id),
                       }}
-                      onMouseEnter={() => setHovered(op)}
-                      onMouseLeave={() =>
-                        setHovered((cur) => (cur === op ? null : cur))
-                      }
+                      title={`${op.operation_id} on ${op.machine_id}${
+                        op.worker_id ? ` / ${op.worker_id}` : ""
+                      }\n${fmtDateTime(op.start)} → ${fmtDateTime(
+                        op.end
+                      )} (${durationMinutes(op.start, op.end)}m)`}
                     >
                       <span className="gantt-bar-text">{op.machine_id}</span>
                     </div>
@@ -178,16 +178,7 @@ export function GanttChart({ operations, date }: Props) {
       </div>
 
       <div className="gantt-explain">
-        {hovered ? (
-          <span>
-            <strong>{hovered.operation_id}</strong> runs on{" "}
-            <strong>{hovered.machine_id}</strong>
-            {hovered.worker_id ? ` with ${hovered.worker_id}` : ""} for order{" "}
-            <strong>{hovered.order_id}</strong> ·{" "}
-            {fmtDateTime(hovered.start)} → {fmtDateTime(hovered.end)} (
-            {durationMinutes(hovered.start, hovered.end)}m).
-          </span>
-        ) : focus ? (
+        {focus ? (
           <span>
             Showing only <strong>{focus}</strong>: {focusOps.length} operation
             {focusOps.length === 1 ? "" : "s"} across {focusOrders} order

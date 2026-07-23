@@ -126,37 +126,18 @@ interface Props {
   date: string;
   reportType: string;
   label?: string;
-  /** Hide the role dropdown (e.g. for compact toolbars). */
-  showRole?: boolean;
 }
 
-/** Role dropdown + "Email" button that opens the preview modal for a tab. */
+/** "Email" button that opens the preview-before-send modal for a tab. */
 export function ReportEmailButton({
   date,
   reportType,
   label = "Email report",
-  showRole = true,
 }: Props) {
-  const [role, setRole] = useState<string>(ROLES[0]);
   const [open, setOpen] = useState(false);
 
   return (
     <div className="email-cta">
-      {showRole && (
-        <select
-          className="role-select"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          title="Send to role"
-          aria-label="Send to role"
-        >
-          {ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      )}
       <button
         type="button"
         className="action-btn ab-primary email-open-btn"
@@ -170,18 +151,18 @@ export function ReportEmailButton({
       {open && (
         <EmailPreviewModal
           title={label}
-          role={showRole ? role : null}
+          role={null}
           fetchPreview={() =>
             api.emailReport(date, {
               report_type: reportType,
-              role: showRole ? role : null,
+              role: null,
               preview: true,
             })
           }
           send={() =>
             api.emailReport(date, {
               report_type: reportType,
-              role: showRole ? role : null,
+              role: null,
               preview: false,
             })
           }
