@@ -40,18 +40,18 @@ class SimulatorConfig(BaseModel):
     operations_per_routing_max: int = Field(default=6, ge=1)
     components_per_bom_min: int = Field(default=2, ge=0)
     components_per_bom_max: int = Field(default=4, ge=0)
-    num_workers: int = Field(default=40, ge=1)
+    num_workers: int = Field(default=26, ge=1)
     num_customers: int = Field(default=8, ge=1)
     num_suppliers: int = Field(default=6, ge=1)
     initial_open_purchase_orders: int = Field(default=10, ge=0)
-    initial_production_orders: int = Field(default=30, ge=0)
+    initial_production_orders: int = Field(default=38, ge=0)
     planning_horizon_days: int = Field(default=30, ge=1)
 
     # --- Order parameters ---
-    order_quantity_min: int = Field(default=20, ge=1)
-    order_quantity_max: int = Field(default=500, ge=1)
-    order_lead_days_min: int = Field(default=3, ge=0)
-    order_lead_days_max: int = Field(default=21, ge=0)
+    order_quantity_min: int = Field(default=50, ge=1)
+    order_quantity_max: int = Field(default=250, ge=1)
+    order_lead_days_min: int = Field(default=5, ge=0)
+    order_lead_days_max: int = Field(default=14, ge=0)
 
     # --- Shifts machines operate on (workers may cover all shifts) ---
     machine_operating_shift_ids: list[str] = Field(

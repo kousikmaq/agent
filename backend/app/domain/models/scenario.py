@@ -48,6 +48,10 @@ class ScenarioComparison(FrozenDomainModel):
         default=ScenarioType.CURRENT_PLAN,
         description="Scenario used as the comparison baseline.",
     )
+    committed_type: ScenarioType = Field(
+        default=ScenarioType.CURRENT_PLAN,
+        description="Scenario currently committed as the plan in use for the day.",
+    )
     results: list[ScenarioResult] = Field(
         default_factory=list, description="Per-scenario KPI results."
     )

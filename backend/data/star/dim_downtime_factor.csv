@@ -1,0 +1,13 @@
+factor_id,factor_name,category,is_operator_error
+F01,Mechanical Failure,Machine,False
+F02,Electrical Fault,Machine,False
+F03,Overheating,Machine,False
+F04,High Vibration,Machine,False
+F05,Material Shortage,Supply,False
+F06,Changeover,Process,False
+F07,Operator Error,Human,True
+F08,Setup Delay,Human,True
+F09,Quality Hold,Process,False
+F10,Scheduled Maintenance,Maintenance,False
+F11,Power Interruption,Utility,False
+F12,Sensor Calibration,Maintenance,False

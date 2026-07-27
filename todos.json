@@ -1,0 +1,61 @@
+{
+  "project": "Production Planning & Schedule Optimization Agent",
+  "framework": "Microsoft Agent Framework (MAF)",
+  "principle": "Open source everywhere; Azure OpenAI gpt-4o only for LLM. Follow CLAUDE.md. No security vulnerabilities.",
+  "loop": "develop -> audit/security/sanity check -> find refinements -> refine -> re-check -> done",
+  "phases": [
+    {
+      "id": "P1",
+      "name": "Data alignment",
+      "status": "done",
+      "tasks": [
+        { "id": "P1.1", "task": "Analyze all 14 source CSVs and relationships", "status": "done" },
+        { "id": "P1.2", "task": "Design coherent beverage-plant star schema (dims + facts)", "status": "done", "verify": "schema.md documents every table/column/key" },
+        { "id": "P1.3", "task": "Write generator producing >=500 aligned rows with ML signal", "status": "done", "verify": "generator runs, all FKs valid" },
+        { "id": "P1.4", "task": "Write validator (FK integrity, ranges, dates, no nulls in keys)", "status": "done", "verify": "validator passes with 0 errors" },
+        { "id": "P1.5", "task": "Regenerate + re-check + refine until clean", "status": "done", "verify": "PASS: On-Time 63/Delayed 25/Failed 12, downtime 0.257" }
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "ML + Optimization + Analytics",
+      "status": "done",
+      "results": "delay macroF1=0.76/AUC=0.93; downtime F1=0.90/recall=0.86; demand MAPE=13.9% vs 22% baseline; scheduler 3 scenarios verified",
+      "tasks": [
+        { "id": "P2.1", "task": "Feature engineering module", "status": "todo" },
+        { "id": "P2.2", "task": "Train Delay-Risk classifier (F1/ROC-AUC)", "status": "todo", "verify": "test F1 >= 0.7" },
+        { "id": "P2.3", "task": "Train Machine-Downtime classifier (Recall/F1)", "status": "todo", "verify": "test Recall >= 0.7" },
+        { "id": "P2.4", "task": "Train Demand forecaster (MAE/MAPE)", "status": "todo", "verify": "MAPE reasonable vs naive baseline" },
+        { "id": "P2.5", "task": "OR-Tools CP-SAT scheduler (job-shop, due dates, eligibility)", "status": "todo", "verify": "feasible schedule for sample orders" },
+        { "id": "P2.6", "task": "Direct-calc analytics: capacity, bottleneck, prioritization, allocation", "status": "todo" },
+        { "id": "P2.7", "task": "ML -> language explainer layer", "status": "todo" }
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "Agents + Actions + Cache + API",
+      "status": "done",
+      "results": "11/11 pytest pass; live REST+WebSocket verified; MAF orchestrator+3 specialists; safe HITL actions",
+      "tasks": [
+        { "id": "P3.1", "task": "Azure OpenAI chat client factory (MAF)", "status": "todo" },
+        { "id": "P3.2", "task": "Tool functions wrapping analytics/ml/optimization", "status": "todo" },
+        { "id": "P3.3", "task": "Action tools: email, reorder, chart, export (HITL)", "status": "todo", "verify": "safe, no secrets logged, input-validated" },
+        { "id": "P3.4", "task": "Semantic cache (SQLite, parameterized)", "status": "todo" },
+        { "id": "P3.5", "task": "MAF specialist agents + orchestrator", "status": "todo" },
+        { "id": "P3.6", "task": "FastAPI (REST + WebSocket streaming, CORS, validation)", "status": "todo", "verify": "TestClient endpoints pass" }
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "Frontend + End-to-end",
+      "status": "done",
+      "results": "React+Vite builds clean, 0 npm vulnerabilities; chat + dashboards + confirmed action buttons",
+      "tasks": [
+        { "id": "P4.1", "task": "React app: chat, dashboards, action approvals", "status": "todo" },
+        { "id": "P4.2", "task": "Wire to API (REST/WebSocket)", "status": "todo" },
+        { "id": "P4.3", "task": "End-to-end sanity + security audit", "status": "todo" },
+        { "id": "P4.4", "task": "README + run instructions", "status": "todo" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+material_id,material_name,unit_of_measure,unit_cost,supplier_id,supplier_lead_time_days,reorder_point,current_stock,safety_stock
+MAT001,Cola Concentrate,litre,180.0,SUP01,7,400,620,150
+MAT002,Citrus Concentrate,litre,165.0,SUP01,7,380,210,150
+MAT003,Sugar Syrup,litre,45.0,SUP02,4,900,1500,300
+MAT004,CO2 Gas,kg,30.0,SUP03,3,500,260,200
+MAT005,PET Preforms,unit,2.5,SUP04,10,20000,42000,8000
+MAT006,Aluminium Cans,unit,3.2,SUP04,10,25000,18000,9000

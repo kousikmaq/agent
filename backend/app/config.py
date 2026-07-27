@@ -71,8 +71,14 @@ class Settings(BaseSettings):
     outputs_dir: Path = BACKEND_DIR / "outputs"
 
     # --- Optimization solver defaults (used by the optimization phase) ---
-    solver_max_time_seconds: float = 30.0
+    solver_max_time_seconds: float = 60.0
     solver_random_seed: int = 42
+
+    # --- Automated planning cadence ---
+    # When True, a background thread refreshes the plan for the current day and,
+    # on Saturdays, publishes the next week's plans (Mon-Sat). Idempotent: days
+    # already planned are skipped, so it never recomputes an existing plan.
+    enable_scheduler: bool = True
 
     # --- Azure OpenAI (used by the explanation/chat phase; optional here) ---
     azure_openai_endpoint: str | None = None

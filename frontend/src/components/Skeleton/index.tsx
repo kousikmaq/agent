@@ -47,3 +47,13 @@ export function DashboardSkeleton() {
     </>
   );
 }
+
+/** Loading placeholder for the email preview modal (subject + body block). */
+export function EmailPreviewSkeleton() {
+  return (
+    <div className="email-preview-skeleton" aria-busy="true" aria-label="Rendering preview">
+      <Skeleton className="skeleton-line lg" />
+      <Skeleton className="skeleton-preview-frame" />
+    </div>
+  );
+}

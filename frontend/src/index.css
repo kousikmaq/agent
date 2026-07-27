@@ -477,7 +477,8 @@ button.primary:hover:not(:disabled) {
 }
 .scenario-card.active {
   border-color: var(--accent, #4f8cff);
-  box-shadow: 0 0 0 1px var(--accent, #4f8cff) inset;
+  box-shadow: 0 0 0 2px var(--accent, #4f8cff) inset,
+    0 4px 14px rgba(79, 140, 255, 0.28);
   background: var(--surface-2);
 }
 .scenario-card-head {
@@ -574,6 +575,19 @@ button.primary:hover:not(:disabled) {
   color: var(--muted);
   font-weight: 700;
 }
+.scenario-why {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.scenario-why li {
+  list-style: disc;
+}
 .scenario-kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -658,6 +672,20 @@ button.primary:hover:not(:disabled) {
 }
 .skeleton-row {
   height: 56px;
+  width: 100%;
+  border-radius: 8px;
+}
+.email-preview-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.email-preview-skeleton .skeleton-line.lg {
+  width: 45%;
+  margin-bottom: 0;
+}
+.skeleton-preview-frame {
+  height: 320px;
   width: 100%;
   border-radius: 8px;
 }
@@ -1746,6 +1774,14 @@ button.primary:hover:not(:disabled) {
   background: var(--bad);
   border-color: var(--bad);
 }
+.action-btn.ab-danger {
+  background: transparent;
+  color: var(--bad, #ef4444);
+  border-color: var(--bad, #ef4444);
+}
+.action-btn.ab-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+}
 .ab-icon {
   font-size: 13px;
 }
@@ -2232,14 +2268,6 @@ button.primary:hover:not(:disabled) {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: #fff;
-}
-.email-modal-loading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  padding: 30px 0;
-  justify-content: center;
 }
 .email-modal-foot {
   display: flex;

@@ -206,6 +206,19 @@ export function OrdersPanel({
   const stagedCount = Object.keys(staged).length;
   const isStaged = (id: string) => staged[id] !== undefined;
 
+  // The changes a re-plan will commit: everything explicitly staged, plus the
+  // currently-selected orders at the chosen priority (so the planner can just
+  // select orders, pick a priority and re-plan without a separate stage step).
+  const pendingChanges = useMemo(() => {
+    const merged: Record<string, number> = { ...staged };
+    if (selected.size > 0) {
+      const raw = Math.max(1, Math.min(10, 10 - pickPriority));
+      for (const id of selected) merged[id] = raw;
+    }
+    return merged;
+  }, [staged, selected, pickPriority]);
+  const pendingCount = Object.keys(pendingChanges).length;
+
   return (
     <div className="panel-list">
       {deliveries && (
@@ -253,11 +266,11 @@ export function OrdersPanel({
           <button
             type="button"
             className="primary"
-            disabled={stagedCount === 0 || replanning}
-            onClick={() => onReplan?.(staged)}
-            title="Re-solve the day with the staged priorities"
+            disabled={pendingCount === 0 || replanning}
+            onClick={() => onReplan?.(pendingChanges)}
+            title="Re-solve the day with the selected/staged priorities"
           >
-            {replanning ? "Re-planning…" : `Re-plan (${stagedCount})`}
+            {replanning ? "Re-planning…" : `Re-plan (${pendingCount})`}
           </button>
           {stagedCount > 0 && !replanning && (
             <button type="button" onClick={clearStaged} title="Discard staged changes">

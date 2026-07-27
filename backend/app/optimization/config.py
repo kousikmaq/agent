@@ -17,20 +17,19 @@ class SolverOptions(BaseModel):
 
     # --- Determinism & budget ---
     max_time_seconds: float = Field(
-        default=30.0, gt=0, description="Wall-clock time budget for the solve."
+        default=60.0, gt=0, description="Wall-clock time budget for the solve."
     )
     random_seed: int = Field(default=42, description="Fixed seed for reproducibility.")
     num_search_workers: int = Field(
         default=8,
         ge=1,
         description=(
-            "CP-SAT parallel search workers. Kept at 8 because a single worker "
-            "cannot find a feasible schedule for the full problem within the "
-            "time budget. Parallel search is not bit-for-bit reproducible, so "
-            "the Scenarios comparison keeps the committed plan and top KPI bar "
-            "in sync by *reusing* the committed solve for the applied scenario's "
-            "row (see ScenarioPlanningEngine.plan's ``injected`` argument) rather "
-            "than relying on a re-solve matching."
+            "CP-SAT parallel search workers. 8 gives materially better plans than "
+            "a single worker (which collapses the scenarios). Run-to-run results "
+            "are not bit-identical, but that no longer matters: the day's plans "
+            "(Current + 3 scenarios) are solved ONCE in the morning and persisted; "
+            "selecting a scenario reuses its saved schedule rather than re-solving, "
+            "so the committed plan is stable and never drifts on selection."
         ),
     )
 
@@ -86,7 +85,16 @@ class SolverOptions(BaseModel):
         ),
     )
     makespan_weight: int = Field(
-        default=1, ge=0, description="Weight on the schedule makespan (compactness)."
+        default=1,
+        ge=0,
+        description=(
+            "Tiny tie-breaker weight on makespan — just enough to prefer a "
+            "compact schedule among equally on-time plans, WITHOUT rewarding "
+            "finishing early. This is a due-date problem: the goal is on-time "
+            "delivery at least cost, not the shortest makespan (finishing before "
+            "the due date only wastes capacity and money). Kept far below the "
+            "on-time-delivery and tardiness terms so it never overrides them."
+        ),
     )
 
     @classmethod

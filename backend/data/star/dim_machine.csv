@@ -1,0 +1,6 @@
+machine_id,machine_name,line,capable_operations,nominal_rate_units_per_hr,hourly_energy_kwh,reliability_index
+M01,Prep-Mixer-1,Line-A,OP10;OP20;OP60,900,18.0,0.93
+M02,Carbo-Unit-2,Line-A,OP10;OP20;OP30,850,22.0,0.88
+M03,Filler-3,Line-B,OP30;OP40,1200,26.0,0.9
+M04,Filler-Labeler-4,Line-B,OP40;OP50,1100,24.0,0.85
+M05,Pack-Line-5,Line-B,OP50;OP60,1000,20.0,0.91

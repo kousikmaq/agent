@@ -30,11 +30,12 @@ from app.explanation import ExplanationContextBuilder
 from app.explanation.schema import ExplanationSummary
 from app.ingestion import CsvDataSource, FactoryStateLoader
 from app.optimization import SchedulingSolver, SolverOptions
+from app.optimization.objective_spec import weights_for
 from app.recommendation import RecommendationEngine
 from app.risk import RiskDetectionEngine
 from app.rules import BusinessRulesEngine
 from app.scenario import ScenarioPlanningEngine
-from app.scenario.comparison import extract_scenario_kpis
+from app.scenario.comparison import compute_kpi_deltas, extract_scenario_kpis
 from app.scenario.definitions import DEFAULT_SCENARIOS
 from app.services.fixes import apply_fix
 from app.utils.file_utils import ensure_dir
@@ -121,6 +122,24 @@ class ResultsStore:
     def load_modifications(self, business_date: str) -> PlanModifications | None:
         return _read(self._dir(business_date) / self.MODIFICATIONS, PlanModifications)
 
+    # --- Per-scenario schedules -------------------------------------------
+    # Each what-if scenario's full schedule is persisted at morning-run time so
+    # selecting a scenario can reuse the exact plan it previewed instead of
+    # re-solving (which would drift and recompute needlessly).
+    def save_scenario_schedule(
+        self, business_date: str, scenario_type: ScenarioType, schedule: ScheduleResult
+    ) -> None:
+        directory = ensure_dir(self._dir(business_date))
+        _write(directory / f"scenario_{scenario_type.value}.json", schedule)
+
+    def load_scenario_schedule(
+        self, business_date: str, scenario_type: ScenarioType
+    ) -> ScheduleResult | None:
+        return _read(
+            self._dir(business_date) / f"scenario_{scenario_type.value}.json",
+            ScheduleResult,
+        )
+
 
 def _write(path: Path, model: BaseModel) -> None:
     path.write_text(model.model_dump_json(indent=2), encoding="utf-8")
@@ -150,6 +169,39 @@ def _light_comparison(business_date: str, kpis: KpiSet) -> ScenarioComparison:
         baseline_type=ScenarioType.CURRENT_PLAN,
         results=[applied],
         kpi_deltas={},
+    )
+
+
+def _comparison_with_applied(
+    existing: ScenarioComparison,
+    applied_type: ScenarioType,
+    kpis: KpiSet,
+) -> ScenarioComparison:
+    """Return ``existing`` with only the applied scenario's row refreshed.
+
+    Committing a scenario must not silently re-solve (and move) the other
+    what-if plans. We therefore keep every other row exactly as it was and only
+    update the applied scenario's KPIs to the freshly committed values, then
+    recompute the deltas against the (unchanged) baseline row.
+    """
+    applied_kpis = extract_scenario_kpis(kpis)
+    results = [
+        result.model_copy(update={"kpis": applied_kpis})
+        if result.scenario_type == applied_type
+        else result
+        for result in existing.results
+    ]
+    baseline = next(
+        (r for r in results if r.scenario_type == existing.baseline_type),
+        results[0] if results else None,
+    )
+    deltas = compute_kpi_deltas(baseline, results) if baseline else {}
+    return ScenarioComparison(
+        business_date=existing.business_date,
+        baseline_type=existing.baseline_type,
+        committed_type=applied_type,
+        results=results,
+        kpi_deltas=deltas,
     )
 
 
@@ -206,12 +258,19 @@ class PlanningOrchestrator:
         state = self._loader.load(business_date)
         policy = self._rules.evaluate(state)
 
-        schedule = SchedulingSolver(options).solve(state, policy)
+        schedule = SchedulingSolver(options).solve(
+            state, policy, weights_for(ScenarioType.CURRENT_PLAN)
+        )
         kpis = self._analytics.compute(state, schedule)
         risks = self._risk.detect(state, schedule, kpis)
         recommendations = self._recommendation.recommend(state, schedule, risks)
+        scenario_schedules: dict[ScenarioType, ScheduleResult] = {}
         scenario_comparison = ScenarioPlanningEngine(options=options).plan(
-            state, policy, injected={ScenarioType.CURRENT_PLAN: kpis}
+            state,
+            policy,
+            injected={ScenarioType.CURRENT_PLAN: kpis},
+            baseline_schedule=schedule,
+            schedules_out=scenario_schedules,
         )
 
         context = self._explanation.build(
@@ -233,6 +292,10 @@ class PlanningOrchestrator:
             scenario_comparison=scenario_comparison,
         )
         self._store.save(result, context, summary)
+        # Persist each scenario's full schedule so selecting a scenario later
+        # reuses the exact plan previewed here instead of re-solving.
+        for scen_type, scen_schedule in scenario_schedules.items():
+            self._store.save_scenario_schedule(business_date, scen_type, scen_schedule)
         # A fresh full run resets the modification log — this plan is the new
         # baseline that later fixes are compared against.
         base = extract_scenario_kpis(kpis)
@@ -321,10 +384,12 @@ class PlanningOrchestrator:
     ) -> PlanningResult:
         """Commit a scenario's plan as the current plan for ``business_date``.
 
-        Applies the scenario transform to the day's state, re-runs the full
-        deterministic pipeline on the transformed state, and persists the
-        result — replacing the previously committed plan. The recomputed
-        scenario comparison uses the applied plan as its new baseline.
+        Reuses the scenario's schedule already computed and persisted by the
+        morning pipeline run — selecting a plan must NOT re-solve, so the
+        committed plan is exactly the one previewed and never drifts. Only the
+        downstream artifacts (risks, deliveries, recommendations) are recomputed
+        against that fixed schedule. Falls back to solving once if no saved
+        scenario schedule exists (e.g. a legacy day).
         """
         options = options or self._default_options
         spec = next(
@@ -352,17 +417,40 @@ class PlanningOrchestrator:
             state.model_copy(deep=True), spec.definition.parameters
         )
 
-        schedule = SchedulingSolver(options).solve(transformed, policy)
+        # Reuse the morning-computed scenario schedule if present (no re-solve),
+        # so the committed plan matches the preview exactly. The transform is
+        # deterministic, so ``transformed`` matches the state that produced the
+        # saved schedule and downstream analytics stay consistent.
+        saved_schedule = self._store.load_scenario_schedule(
+            business_date, scenario_type
+        )
+        if saved_schedule is not None:
+            schedule = saved_schedule
+        else:
+            schedule = SchedulingSolver(options).solve(
+                transformed,
+                policy,
+                weights_for(scenario_type),
+                warm_start=self._store.load_schedule(business_date),
+            )
         kpis = self._analytics.compute(transformed, schedule)
         risks = self._risk.detect(transformed, schedule, kpis)
         recommendations = self._recommendation.recommend(transformed, schedule, risks)
-        # The comparison is always solved from the day's ORIGINAL dataset state
-        # (never the transformed state) so applying a scenario does not compound
-        # the change on top of itself. The applied scenario's own row reuses the
-        # committed KPIs so the Scenarios tab matches the top bar exactly.
-        scenario_comparison = ScenarioPlanningEngine(options=options).plan(
-            state, policy, injected={scenario_type: kpis}
-        )
+        # Preserve the day's EXISTING what-if comparison so committing one plan
+        # does not silently re-solve (and therefore move) the other scenarios'
+        # numbers — the solver is non-reproducible, so a fresh re-solve of the
+        # untouched scenarios would drift. Only the applied scenario's row is
+        # refreshed to the committed KPIs so it matches the top bar exactly. If
+        # no comparison exists yet, fall back to solving one once.
+        existing_scenarios = self._store.load_scenarios(business_date)
+        if existing_scenarios is not None:
+            scenario_comparison = _comparison_with_applied(
+                existing_scenarios, scenario_type, kpis
+            )
+        else:
+            scenario_comparison = ScenarioPlanningEngine(options=options).plan(
+                state, policy, injected={scenario_type: kpis}
+            ).model_copy(update={"committed_type": scenario_type})
 
         context = self._explanation.build(
             business_date=business_date,
@@ -619,6 +707,111 @@ class PlanningOrchestrator:
         return self._finalize_replan(
             business_date, transformed, policy, options, mod_entries
         )
+
+    def _apply_modification(self, state, modification: PlanModification):
+        """Re-apply one logged modification to ``state`` (for cumulative undo)."""
+        if modification.action == "RAISE_PRIORITY":
+            ids = set(modification.targets.get("order_ids", []))
+            if ids:
+                state.production_orders = [
+                    o.model_copy(update={"priority": 10})
+                    if o.order_id in ids
+                    else o
+                    for o in state.production_orders
+                ]
+            return state
+        try:
+            rec_action = RecommendationAction(modification.action)
+        except ValueError:
+            return state  # unknown action — skip rather than fail the rebuild
+        return apply_fix(state, rec_action, modification.targets or {})
+
+    def remove_modification(
+        self,
+        business_date: str,
+        applied_at: str,
+        options: SolverOptions | None = None,
+    ) -> PlanningResult:
+        """Remove one applied modification and rebuild the committed plan.
+
+        The plan is rebuilt from the day's ORIGINAL state by re-applying every
+        *remaining* modification cumulatively, then re-solving — a genuine undo
+        of just the removed change. If nothing remains, the plan reverts to the
+        original baseline. Downstream artifacts are recomputed; the existing
+        what-if comparison is preserved.
+        """
+        options = options or self._default_options
+        mods = self._store.load_modifications(business_date)
+        if mods is None:
+            raise NotFoundError(
+                f"No modification log for {business_date}.",
+                details={"business_date": business_date},
+            )
+        remaining = [m for m in mods.modifications if m.applied_at != applied_at]
+        if len(remaining) == len(mods.modifications):
+            raise NotFoundError(
+                f"No modification applied at {applied_at} for {business_date}.",
+                details={"applied_at": applied_at},
+            )
+
+        logger.info(
+            "Removing modification %s for %s; rebuilding from %d remaining.",
+            applied_at,
+            business_date,
+            len(remaining),
+        )
+
+        state = self._loader.load(business_date)
+        transformed = state.model_copy(deep=True)
+        for modification in remaining:
+            transformed = self._apply_modification(transformed, modification)
+        policy = self._rules.evaluate(transformed)
+
+        existing_scenarios = self._store.load_scenarios(business_date)
+        # If nothing remains, restore the ORIGINAL baseline plan exactly (reuse
+        # the schedule the morning run persisted) instead of re-solving — a
+        # re-solve would drift and could land on a worse plan than the baseline.
+        baseline_schedule = self._store.load_scenario_schedule(
+            business_date, ScenarioType.CURRENT_PLAN
+        )
+        if not remaining and baseline_schedule is not None:
+            schedule = baseline_schedule
+        else:
+            schedule = SchedulingSolver(options).solve(transformed, policy)
+        kpis = self._analytics.compute(transformed, schedule)
+        risks = self._risk.detect(transformed, schedule, kpis)
+        recommendations = self._recommendation.recommend(transformed, schedule, risks)
+        scenario_comparison = existing_scenarios or _light_comparison(
+            business_date, kpis
+        )
+
+        context = self._explanation.build(
+            business_date=business_date,
+            schedule=schedule,
+            kpis=kpis,
+            risks=risks,
+            recommendations=recommendations,
+            scenario_comparison=scenario_comparison,
+        )
+        summary = self._explanation.summarize(context)
+        result = PlanningResult(
+            business_date=business_date,
+            schedule=schedule,
+            kpis=kpis,
+            risks=risks,
+            recommendations=recommendations,
+            scenario_comparison=scenario_comparison,
+        )
+        self._store.save(result, context, summary)
+        self._store.save_modifications(
+            PlanModifications(
+                business_date=business_date,
+                baseline_kpis=mods.baseline_kpis,
+                current_kpis=extract_scenario_kpis(kpis),
+                modifications=remaining,
+            )
+        )
+        return result
 
     def get_or_run(
         self,

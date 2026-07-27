@@ -87,6 +87,11 @@ export const api = {
   getRisks: (date: string) => request<RiskReport>(`/risks/${date}`),
   getModifications: (date: string) =>
     request<PlanModifications>(`/risks/${date}/modifications`),
+  removeModification: (date: string, applied_at: string, max_time_seconds?: number) =>
+    request<ScheduleResult>(`/risks/${date}/modifications/remove`, {
+      method: "POST",
+      body: JSON.stringify({ applied_at, max_time_seconds }),
+    }),
   mitigateOrderPriority: (
     date: string,
     order_ids: string[],

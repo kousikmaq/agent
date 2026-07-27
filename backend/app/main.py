@@ -8,6 +8,8 @@ avoids import-time side effects.
 
 from __future__ import annotations
 
+import os
+import threading
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -42,9 +44,38 @@ def _build_lifespan(settings: Settings):
         logger.info("Datasets dir: %s", settings.datasets_dir)
         logger.info("Outputs dir:  %s", settings.outputs_dir)
 
+        # Start the daily/weekly planning cadence (refresh today's plan; publish
+        # next week's plans every Saturday). Runs in a daemon thread so solving
+        # never blocks startup or the API, and is idempotent so it never
+        # recomputes an already-planned day.
+        stop_event: threading.Event | None = None
+        if settings.enable_scheduler and not os.environ.get("PYTEST_CURRENT_TEST"):
+            from app.services.orchestrator import PlanningOrchestrator
+            from app.services.planning_scheduler import (
+                PlanningScheduler,
+                start_scheduler_thread,
+            )
+            from simulator.config import SimulatorConfig
+            from simulator.engine import SimulatorEngine
+
+            orchestrator = PlanningOrchestrator(
+                datasets_dir=settings.datasets_dir, outputs_dir=settings.outputs_dir
+            )
+            simulator = SimulatorEngine(
+                config=SimulatorConfig(), datasets_dir=settings.datasets_dir
+            )
+            scheduler = PlanningScheduler(
+                orchestrator, simulator, settings.datasets_dir
+            )
+            stop_event = threading.Event()
+            start_scheduler_thread(scheduler, stop_event)
+            logger.info("Daily/weekly planning scheduler started.")
+
         yield
 
         # --- Shutdown ---
+        if stop_event is not None:
+            stop_event.set()
         logger.info("Shutting down %s", settings.app_name)
 
     return lifespan

@@ -251,12 +251,16 @@ def _build_inventory(
             )
         )
     for material in raw:
-        on_hand = float(rng.randint(200, 2000))
+        # Stock raw materials well above a single order's worst-case draw
+        # (order qty x quantity_per) so orders are not starved of components;
+        # remaining lateness is then driven by machine/labour capacity, which
+        # the scenarios and risk fixes can actually address.
+        on_hand = float(rng.randint(3000, 9000))
         inventory.append(
             InventoryItem(
                 product_id=material.product_id,
                 on_hand=on_hand,
-                allocated=float(rng.randint(0, int(on_hand * 0.3))),
+                allocated=float(rng.randint(0, int(on_hand * 0.2))),
                 safety_stock=float(rng.randint(100, 300)),
                 reorder_point=float(rng.randint(300, 600)),
             )

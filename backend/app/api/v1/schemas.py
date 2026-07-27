@@ -90,6 +90,17 @@ class ApplyFixRequest(BaseModel):
     )
 
 
+class RemoveModificationRequest(BaseModel):
+    """Request body to remove one applied modification and rebuild the plan."""
+
+    applied_at: str = Field(
+        ..., description="applied_at timestamp identifying the modification."
+    )
+    max_time_seconds: float | None = Field(
+        default=None, gt=0, description="Optional solver time budget override."
+    )
+
+
 class FixActionItem(BaseModel):
     """One recommended fix action within a combined apply request."""
 

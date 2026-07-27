@@ -1,0 +1,4 @@
+shift_id,shift_name,start_time,end_time,capacity_hours,required_workers
+S1,Morning,06:00,14:00,8,30
+S2,Evening,14:00,22:00,8,26
+S3,Night,22:00,06:00,8,18

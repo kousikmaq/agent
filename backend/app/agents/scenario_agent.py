@@ -11,10 +11,12 @@ from __future__ import annotations
 from app.agents.base import BaseAgent
 from app.agents.context import WorkflowContext
 from app.agents.contracts import ScenarioAgentOutput
+from app.agents.analytics_agent import KPIS_KEY
 from app.agents.data_agent import FACTORY_STATE_KEY
 from app.agents.errors import CriticalAgentError
 from app.agents.planning_agent import RULE_POLICY_KEY, SCHEDULE_RESULT_KEY
 from app.agents.timing import Stopwatch
+from app.domain.enums import ScenarioType
 from app.domain.models.scenario import ScenarioComparison
 from app.optimization import SolverOptions
 from app.scenario import ScenarioPlanningEngine
@@ -55,8 +57,21 @@ class ScenarioAgent(BaseAgent):
             )
 
         engine = self._engine or ScenarioPlanningEngine(options=self._options)
+        # Match the deterministic orchestrator exactly: reuse the committed
+        # plan's KPIs for the Current Plan row (injected) and warm-start every
+        # what-if from the baseline schedule.
+        baseline_schedule = context.shared.get(SCHEDULE_RESULT_KEY)
+        kpis = context.shared.get(KPIS_KEY)
+        injected = (
+            {ScenarioType.CURRENT_PLAN: kpis} if kpis is not None else None
+        )
         with Stopwatch() as sw:
-            comparison = engine.plan(state, policy)
+            comparison = engine.plan(
+                state,
+                policy,
+                injected=injected,
+                baseline_schedule=baseline_schedule,
+            )
 
         context.shared[SCENARIO_COMPARISON_KEY] = comparison
         self._log_comparison(comparison, sw.elapsed_ms)

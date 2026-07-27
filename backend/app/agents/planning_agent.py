@@ -18,9 +18,10 @@ from app.agents.contracts import PlanningAgentOutput
 from app.agents.data_agent import FACTORY_STATE_KEY
 from app.agents.errors import CriticalAgentError
 from app.agents.timing import Stopwatch, utc_now_iso
-from app.domain.enums import OrderStatus, SolverStatus
+from app.domain.enums import OrderStatus, ScenarioType, SolverStatus
 from app.domain.models.factory_state import FactoryState
 from app.optimization import SchedulingSolver, SolverOptions
+from app.optimization.objective_spec import weights_for
 from app.rules import BusinessRulesEngine
 
 # Shared-context keys for the produced artifacts.
@@ -79,7 +80,11 @@ class PlanningAgent(BaseAgent):
         solver = self._solver or SchedulingSolver(self._options)
         started_at = utc_now_iso()
         with Stopwatch() as sw:
-            schedule = solver.solve(state, policy)
+            # Solve the committed (Current Plan) objective so the MAF path
+            # matches the deterministic orchestrator's baseline exactly.
+            schedule = solver.solve(
+                state, policy, weights_for(ScenarioType.CURRENT_PLAN)
+            )
         finished_at = utc_now_iso()
 
         # Store the schedule (even on failure) for diagnostics/visibility.

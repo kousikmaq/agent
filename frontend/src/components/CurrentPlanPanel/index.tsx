@@ -12,6 +12,10 @@ interface Props {
   onReapply?: (modification: PlanModification) => void;
   /** applied_at of the modification currently being re-applied, if any. */
   reapplying?: string | null;
+  /** Remove a single applied modification and rebuild the plan. */
+  onRemove?: (modification: PlanModification) => void;
+  /** applied_at of the modification currently being removed, if any. */
+  removing?: string | null;
 }
 
 const fmtCount = (v: number) => String(Math.round(v));
@@ -91,6 +95,8 @@ export function CurrentPlanPanel({
   reverting,
   onReapply,
   reapplying,
+  onRemove,
+  removing,
 }: Props) {
   const hasMods = data.modifications.length > 0;
   // applied_at of the modification whose plan detail is expanded.
@@ -193,6 +199,7 @@ export function CurrentPlanPanel({
             {data.modifications.map((m, i) => {
               const isOpen = openMod === `${m.applied_at}-${i}`;
               const isReapplying = reapplying === m.applied_at;
+              const isRemoving = removing === m.applied_at;
               return (
                 <li key={`${m.applied_at}-${i}`} className="rec-item">
                   <div className="rec-item-head">
@@ -218,6 +225,17 @@ export function CurrentPlanPanel({
                     >
                       {isOpen ? "Hide the plan" : "See the plan"}
                     </button>
+                    {onRemove && (
+                      <button
+                        type="button"
+                        className="action-btn ab-danger"
+                        disabled={isRemoving || isReapplying || reverting}
+                        onClick={() => onRemove(m)}
+                        title="Remove this modification and rebuild the plan"
+                      >
+                        {isRemoving ? "Removing…" : "✕ Remove"}
+                      </button>
+                    )}
                   </div>
 
                   {isOpen && (

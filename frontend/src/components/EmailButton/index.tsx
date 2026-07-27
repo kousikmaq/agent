@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type { EmailPreviewResponse, EmailResult } from "../../types/api";
 import { ActionButton } from "../ActionButton";
+import { EmailPreviewSkeleton } from "../Skeleton";
 import { toast } from "../Toast";
 
 /** Operational roles a report can be addressed to (mirrors the backend). */
@@ -89,9 +90,7 @@ function EmailPreviewModal({ title, role, fetchPreview, send, onClose }: ModalPr
           {error ? (
             <p className="login-error">{error}</p>
           ) : !preview ? (
-            <div className="email-modal-loading">
-              <span className="ab-spinner" aria-hidden /> Rendering preview…
-            </div>
+            <EmailPreviewSkeleton />
           ) : (
             <>
               <div className="email-modal-subject">{preview.subject}</div>

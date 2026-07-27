@@ -83,6 +83,9 @@ class SchedulingModel:
         self.tardiness: dict[str, cp_model.IntVar] = {}
         self.late_flags: dict[str, cp_model.IntVar] = {}
         self.makespan: cp_model.IntVar | None = None
+        # Named linear objective expressions, populated in build(); the solver
+        # optimises a per-scenario ordered subset of these lexicographically.
+        self.objective_terms: dict[str, object] = {}
         self.horizon: int = _MINUTES_PER_DAY
         self.warnings: list[str] = []
 
@@ -176,7 +179,12 @@ class SchedulingModel:
 
     # -- Build --------------------------------------------------------------
     def build(self) -> "SchedulingModel":
-        """Create variables and apply every constraint family and the objective."""
+        """Create variables and apply every constraint family.
+
+        The objective itself is NOT fixed here: :meth:`_build_objective_terms`
+        publishes named linear expressions and the solver minimises a
+        per-scenario ordered subset of them lexicographically.
+        """
         # Imported here to keep module import order simple and avoid cycles.
         from app.optimization.constraints import (
             add_due_dates,
@@ -187,7 +195,6 @@ class SchedulingModel:
             add_shift_calendar,
             add_workforce_skills,
         )
-        from app.optimization.objectives import build_objective
 
         self._create_tasks()
         if not self.tasks:
@@ -204,8 +211,68 @@ class SchedulingModel:
             add_material_availability(self)
         add_due_dates(self)
 
-        build_objective(self)
+        self._build_objective_terms()
         return self
+
+    def _build_objective_terms(self) -> None:
+        """Publish the named linear objective expressions used by scenarios.
+
+        Each is a minimisation target (lower is better). Maximising on-time
+        delivery is expressed as minimising ``num_late``.
+        """
+        cp = self.model
+        total_duration = sum(task.duration for task in self.tasks) or 1
+
+        # On-time delivery: count of late orders, and total tardiness minutes.
+        self.objective_terms["num_late"] = (
+            sum(self.late_flags.values()) if self.late_flags else 0
+        )
+        self.objective_terms["total_tardiness"] = (
+            sum(self.tardiness.values()) if self.tardiness else 0
+        )
+
+        # Throughput / compactness.
+        if self.makespan is not None:
+            self.objective_terms["makespan"] = self.makespan
+        self.objective_terms["total_flow"] = (
+            sum(self.order_completion.values()) if self.order_completion else 0
+        )
+
+        # Machine load balance / bottleneck: minimise the busiest machine's
+        # assigned processing time so work spreads across eligible machines.
+        machine_load_terms: dict[str, list] = {}
+        for task in self.tasks:
+            for machine_id, presence in task.machine_presence.items():
+                machine_load_terms.setdefault(machine_id, []).append(
+                    task.duration * presence
+                )
+        max_load = cp.NewIntVar(0, total_duration, "max_machine_load")
+        for terms in machine_load_terms.values():
+            cp.Add(sum(terms) <= max_load)
+        self.objective_terms["max_machine_load"] = max_load
+
+        # Overtime minutes: labour assigned to a worker beyond their regular
+        # daily capacity (a cost proxy; minimised so overtime is only "spent"
+        # when a higher-priority objective — fewer late orders — required it).
+        workers_by_id = {w.worker_id: w for w in self.state.workers}
+        worker_task_terms: dict[str, list] = {}
+        for task in self.tasks:
+            for worker_id, presence in task.worker_presence.items():
+                worker_task_terms.setdefault(worker_id, []).append(
+                    task.duration * presence
+                )
+        overtime_vars = []
+        for worker_id, terms in worker_task_terms.items():
+            worker = workers_by_id.get(worker_id)
+            cap = worker.max_regular_minutes_per_day if worker is not None else 480
+            minutes = cp.NewIntVar(0, total_duration, f"wmin_{worker_id}")
+            cp.Add(minutes == sum(terms))
+            overtime = cp.NewIntVar(0, total_duration, f"wot_{worker_id}")
+            cp.Add(overtime >= minutes - cap)
+            overtime_vars.append(overtime)
+        self.objective_terms["total_overtime"] = (
+            sum(overtime_vars) if overtime_vars else 0
+        )
 
     def _duration_minutes(self, operation: Operation, quantity: int) -> int:
         """Deterministic processing time for an operation at a given quantity."""

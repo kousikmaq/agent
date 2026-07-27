@@ -11,6 +11,7 @@ from app.api.v1.schemas import (
     ApplyFixesRequest,
     ApplyFixRequest,
     MitigateOrdersRequest,
+    RemoveModificationRequest,
     ReplanPrioritiesRequest,
 )
 from app.core.exceptions import NotFoundError
@@ -55,6 +56,33 @@ async def get_modifications(
             details={"business_date": business_date},
         )
     return mods
+
+
+@router.post(
+    "/{business_date}/modifications/remove",
+    response_model=ScheduleResult,
+    summary="Remove one applied modification and rebuild the plan",
+)
+async def remove_modification(
+    business_date: str,
+    request: RemoveModificationRequest,
+    orchestrator: Annotated[PlanningOrchestrator, Depends(get_orchestrator)],
+) -> ScheduleResult:
+    """Undo a single applied modification and rebuild the committed plan.
+
+    Rebuilds from the original state by re-applying the remaining modifications
+    cumulatively, then re-solves; downstream artifacts are recomputed. Reverts
+    to the baseline if no modifications remain.
+    """
+    options = None
+    if request.max_time_seconds is not None:
+        options = SolverOptions.from_settings().model_copy(
+            update={"max_time_seconds": request.max_time_seconds}
+        )
+    result = orchestrator.remove_modification(
+        business_date, request.applied_at, options
+    )
+    return result.schedule
 
 
 @router.post(

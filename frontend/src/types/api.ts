@@ -86,6 +86,7 @@ export interface ScenarioResult {
 export interface ScenarioComparison {
   business_date: string;
   baseline_type: string;
+  committed_type: string;
   results: ScenarioResult[];
   kpi_deltas: Record<string, Record<string, number>>;
 }

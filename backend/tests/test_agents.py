@@ -319,7 +319,7 @@ def test_planning_agent_invokes_solver_and_stores_results(tmp_path: Path) -> Non
 
 def test_workflow_stops_on_infeasible_solver(tmp_path: Path) -> None:
     class InfeasibleSolver:
-        def solve(self, state, policy) -> ScheduleResult:
+        def solve(self, state, policy, objective=None, warm_start=None) -> ScheduleResult:
             return ScheduleResult(
                 business_date=state.business_date,
                 status=SolverStatus.INFEASIBLE,

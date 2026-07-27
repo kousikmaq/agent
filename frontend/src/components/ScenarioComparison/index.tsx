@@ -6,6 +6,9 @@ interface Props {
   comparison: Comparison;
   onApply?: (scenarioType: string, name: string) => void;
   applying?: string | null;
+  /** The scenario currently committed as the plan — highlighted and shown
+   * first when the planner returns to this tab. */
+  committedType?: string | null;
   /** Notifies the parent which scenario is selected (for the email report). */
   onSelect?: (scenarioType: string) => void;
 }
@@ -101,36 +104,127 @@ function DeltaChip({
   );
 }
 
+/** Plain-language reasons the selected plan looks the way it does, derived
+ * from its KPI deltas versus the baseline (including the main cost driver). */
+function buildExplanation(comparison: Comparison, r: Comparison["results"][number]): string[] {
+  if (r.is_baseline) {
+    return [
+      "This is the baseline schedule built from today's existing machines, workforce and shifts — every other plan is measured against it.",
+    ];
+  }
+  const d = (key: string) => delta(comparison, r.name, key) ?? 0;
+  const lines: string[] = [];
+
+  const otd = d("on_time_delivery_rate");
+  if (Math.abs(otd) >= 0.005) {
+    lines.push(
+      otd > 0
+        ? `Delivers ${fmtPercent(otd)} more orders on time — the added capacity lets at-risk orders be scheduled before their due dates.`
+        : `Delivers ${fmtPercent(Math.abs(otd))} fewer orders on time than the baseline.`
+    );
+  } else {
+    lines.push("On-time delivery is about the same as the baseline (capacity was not the limiting factor for the late orders).");
+  }
+
+  const tard = d("total_tardiness_minutes");
+  if (Math.abs(tard) >= 60) {
+    lines.push(
+      tard < 0
+        ? `Total lateness across all orders drops by ${fmtMinutes(Math.abs(tard))}.`
+        : `Total lateness rises by ${fmtMinutes(tard)} (a few orders finish later so more finish on time).`
+    );
+  }
+
+  const ms = d("makespan_minutes");
+  if (Math.abs(ms) >= 60) {
+    lines.push(
+      ms < 0
+        ? `The whole plan finishes ${fmtMinutes(Math.abs(ms))} sooner because more work runs in parallel.`
+        : `The whole plan finishes ${fmtMinutes(ms)} later.`
+    );
+  }
+
+  const ct = d("cost_total");
+  if (Math.abs(ct) >= 1) {
+    const drivers = [
+      { label: "overtime labour", key: "cost_labor_overtime" },
+      { label: "regular labour", key: "cost_labor_regular" },
+      { label: "machine running", key: "cost_machine" },
+      { label: "late-delivery penalties", key: "cost_tardiness_penalty" },
+    ]
+      .map((x) => ({ ...x, v: d(x.key) }))
+      .sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    const top = drivers[0];
+    const dir = ct < 0 ? "lower" : "higher";
+    let why = ".";
+    if (top && Math.abs(top.v) >= 1) {
+      why = ` — mostly ${fmtCurrency(Math.abs(top.v))} ${top.v < 0 ? "less" : "more"} on ${top.label}.`;
+    }
+    lines.push(
+      `Estimated cost is ${fmtCurrency(Math.abs(ct))} ${dir}${why}` +
+        (ct < 0
+          ? " Fewer late orders means smaller late-delivery penalties, which can outweigh the extra labour."
+          : "")
+    );
+  }
+
+  return lines;
+}
+
 /**
  * Scenario workspace: a card selector across the top opens a dedicated page for
  * each what-if plan, where the planner can review full details and choose the
  * plan that best fits.
  */
-export function ScenarioComparison({ comparison, onApply, applying, onSelect }: Props) {
+export function ScenarioComparison({
+  comparison,
+  onApply,
+  applying,
+  committedType,
+  onSelect,
+}: Props) {
   const baselineName =
     comparison.results.find((r) => r.is_baseline)?.name ?? null;
 
-  const best = useMemo(
-    () =>
-      comparison.results.reduce<string | null>((best, r) => {
-        if (r.kpis["makespan_minutes"] === undefined) return best;
-        if (best === null) return r.name;
-        const bestVal = comparison.results.find((x) => x.name === best)!.kpis[
-          "makespan_minutes"
-        ];
-        return r.kpis["makespan_minutes"] < bestVal ? r.name : best;
-      }, null),
-    [comparison.results]
-  );
+  // The committed plan's name (if a scenario has been applied), so it can be
+  // pre-selected and badged as the one in use.
+  const committedName =
+    comparison.results.find((r) => r.scenario_type === committedType)?.name ??
+    null;
+
+  // The "best" plan is the one that delivers the most orders on time (highest
+  // OTD). Ties are broken by the least total lateness, then the shortest
+  // makespan — so among equally on-time plans the tighter, faster one wins.
+  const best = useMemo(() => {
+    const scored = comparison.results.filter(
+      (r) => r.kpis["on_time_delivery_rate"] !== undefined
+    );
+    if (scored.length === 0) return null;
+    const winner = scored.reduce((a, b) => {
+      const ao = a.kpis["on_time_delivery_rate"];
+      const bo = b.kpis["on_time_delivery_rate"];
+      if (bo !== ao) return bo > ao ? b : a;
+      const at = a.kpis["total_tardiness_minutes"] ?? Infinity;
+      const bt = b.kpis["total_tardiness_minutes"] ?? Infinity;
+      if (bt !== at) return bt < at ? b : a;
+      const am = a.kpis["makespan_minutes"] ?? Infinity;
+      const bm = b.kpis["makespan_minutes"] ?? Infinity;
+      return bm < am ? b : a;
+    });
+    return winner.name;
+  }, [comparison.results]);
 
   const [selectedName, setSelectedName] = useState<string | null>(
-    baselineName ?? comparison.results[0]?.name ?? null
+    committedName ?? baselineName ?? comparison.results[0]?.name ?? null
   );
 
-  // Reset to the baseline scenario whenever the day changes.
+  // Default to the committed plan if one is applied, else the baseline, and
+  // re-apply whenever the day or committed plan changes.
   useEffect(() => {
-    setSelectedName(baselineName ?? comparison.results[0]?.name ?? null);
-  }, [comparison.business_date, baselineName, comparison.results]);
+    setSelectedName(
+      committedName ?? baselineName ?? comparison.results[0]?.name ?? null
+    );
+  }, [comparison.business_date, committedName, baselineName, comparison.results]);
 
   const selected =
     comparison.results.find((r) => r.name === selectedName) ??
@@ -141,6 +235,15 @@ export function ScenarioComparison({ comparison, onApply, applying, onSelect }: 
   useEffect(() => {
     if (selected) onSelect?.(selected.scenario_type);
   }, [selected, onSelect]);
+
+  // Show the chosen plan first so it leads the row (and stays highlighted).
+  const orderedResults = useMemo(() => {
+    if (!selected) return comparison.results;
+    return [
+      selected,
+      ...comparison.results.filter((r) => r.name !== selected.name),
+    ];
+  }, [comparison.results, selected]);
 
   const applyDisabled = applying !== null && applying !== undefined;
 
@@ -153,7 +256,7 @@ export function ScenarioComparison({ comparison, onApply, applying, onSelect }: 
 
       {/* Scenario selector — one card per scenario. */}
       <div className="scenario-cards" role="tablist" aria-label="Scenarios">
-        {comparison.results.map((r) => {
+        {orderedResults.map((r) => {
           const isSel = selected?.name === r.name;
           return (
             <button
@@ -169,6 +272,9 @@ export function ScenarioComparison({ comparison, onApply, applying, onSelect }: 
               <div className="scenario-card-head">
                 <span className="scenario-card-name">{r.name}</span>
                 <span className="scenario-card-badges">
+                  {r.name === committedName && (
+                    <span className="badge feas-ok">✓ in use</span>
+                  )}
                   {r.is_baseline && <span className="badge">baseline</span>}
                   {r.name === best && (
                     <span className="badge feas-ok">best</span>
@@ -221,27 +327,58 @@ export function ScenarioComparison({ comparison, onApply, applying, onSelect }: 
               </p>
             </div>
             <div className="scenario-page-action">
-              {onApply && !selected.is_baseline && (
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={applyDisabled}
-                  onClick={() => onApply(selected.scenario_type, selected.name)}
-                >
-                  {applying === selected.name ? "Applying…" : "Use this plan"}
-                </button>
-              )}
-              {selected.is_baseline ? (
-                <span className="muted scenario-action-note">
-                  This is the current committed plan.
-                </span>
-              ) : (
-                <span className="muted scenario-action-note">
-                  Replaces today's committed plan and recomputes risks,
-                  deliveries and recommendations.
-                </span>
-              )}
+              {(() => {
+                const isCommitted = selected.scenario_type === committedType;
+                if (isCommitted) {
+                  return (
+                    <>
+                      <button type="button" className="primary" disabled>
+                        ✓ In use
+                      </button>
+                      <span className="muted scenario-action-note">
+                        This is the plan currently in use for the day.
+                      </span>
+                    </>
+                  );
+                }
+                return (
+                  <>
+                    {onApply && (
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={applyDisabled}
+                        onClick={() =>
+                          onApply(selected.scenario_type, selected.name)
+                        }
+                      >
+                        {applying === selected.name
+                          ? selected.is_baseline
+                            ? "Switching…"
+                            : "Applying…"
+                          : selected.is_baseline
+                          ? "Switch to current plan"
+                          : "Use this plan"}
+                      </button>
+                    )}
+                    <span className="muted scenario-action-note">
+                      {selected.is_baseline
+                        ? "Restores the original baseline plan and recomputes risks, deliveries and recommendations."
+                        : "Replaces today's committed plan and recomputes risks, deliveries and recommendations."}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
+          </div>
+
+          <div className="scenario-section">
+            <span className="scenario-approach-label">Why this plan looks like this</span>
+            <ul className="scenario-why">
+              {buildExplanation(comparison, selected).map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
           </div>
 
           <div className="scenario-section">

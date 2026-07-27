@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from app.api.v1 import deps
 from app.chat.responder import ChatResponse
 from app.config import Settings, get_settings
+from app.ingestion import CsvDataSource
 from app.main import create_app
 from app.services import PlanningOrchestrator, ResultsStore
 from app.optimization import SolverOptions
@@ -71,6 +72,7 @@ def client(tmp_path: Path) -> TestClient:
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[deps.get_orchestrator] = lambda: orchestrator
     app.dependency_overrides[deps.get_results_store] = lambda: orchestrator.store
+    app.dependency_overrides[deps.get_data_source] = lambda: CsvDataSource(datasets)
     app.dependency_overrides[deps.get_simulator_engine] = lambda: sim_engine
     app.dependency_overrides[deps.get_chat_responder] = lambda: _FakeResponder()
     return TestClient(app)

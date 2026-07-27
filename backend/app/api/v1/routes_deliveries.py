@@ -6,6 +6,7 @@ computed from the persisted schedule and the day's factory snapshot.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -68,9 +69,17 @@ async def get_delivery_drift(
         source.load(business_date), schedule, horizon_days=horizon_days
     )
 
-    # Find the latest prior date that has both a schedule and a snapshot.
+    # Find the latest prior *operating* day to compare against. Only days that
+    # have actually happened (strictly before the business date AND on or before
+    # today) are eligible — a future snapshot (e.g. a generated next-day or
+    # Saturday plan) must never be used as the drift baseline.
+    today = date.today().isoformat()
     previous = None
-    prior_dates = [d for d in source.available_dates() if d < business_date]
+    prior_dates = [
+        d
+        for d in source.available_dates()
+        if d < business_date and d <= today
+    ]
     for prev_date in sorted(prior_dates, reverse=True):
         prev_schedule = store.load_schedule(prev_date)
         if prev_schedule is None:

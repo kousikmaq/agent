@@ -119,6 +119,7 @@ export function DashboardPage({
   const [deliveriesLoading, setDeliveriesLoading] = useState(false);
   const [weeklyLoading, setWeeklyLoading] = useState(false);
   const [modificationsLoading, setModificationsLoading] = useState(false);
+  const [materialsLoading, setMaterialsLoading] = useState(false);
   // A generated future day (> today): a forward plan with no actuals yet.
   const [nextDayPlan, setNextDayPlan] = useState<string | null>(null);
   // Side assistant dock visibility.
@@ -140,6 +141,7 @@ export function DashboardPage({
   );
   // applied_at of the modification currently being re-applied, if any.
   const [reapplyingMod, setReapplyingMod] = useState<string | null>(null);
+  const [removingMod, setRemovingMod] = useState<string | null>(null);
   // Whether an Orders-tab priority re-plan is running.
   const [replanningOrders, setReplanningOrders] = useState(false);
   // The scenario currently selected on the Scenarios tab (for its email).
@@ -211,10 +213,13 @@ export function DashboardPage({
       setData({ schedule, kpis, risks, recommendations, scenarios });
       setStatus("");
       loadDeliveries(date);
+      setMaterialsLoading(true);
+      setMaterials(null);
       api
         .getMaterials(date)
         .then(setMaterials)
-        .catch(() => setMaterials(null));
+        .catch(() => setMaterials(null))
+        .finally(() => setMaterialsLoading(false));
       // Load the snapshot to get a priority for every order (not just those in
       // the delivery horizon), so the Orders tab shows no blanks.
       api
@@ -365,6 +370,28 @@ export function DashboardPage({
     }
   }
 
+  async function onRemoveModification(m: PlanModification) {
+    if (!selectedDate || removingMod) return;
+    const ok = window.confirm(
+      `Remove "${m.label}" from the plan for ${selectedDate}?\n\n` +
+        "This rebuilds the plan from the remaining modifications and recomputes " +
+        "KPIs, risks, deliveries and recommendations."
+    );
+    if (!ok) return;
+    setRemovingMod(m.applied_at);
+    setStatus(`Removing "${m.label}" from ${selectedDate}…`);
+    try {
+      await api.removeModification(selectedDate, m.applied_at, MITIGATE_MAX_SECONDS);
+      await loadResults(selectedDate);
+      setStatus(`Removed "${m.label}" — the plan was rebuilt from the rest.`);
+      setTab("current");
+    } catch {
+      setStatus(`Failed to remove "${m.label}".`);
+    } finally {
+      setRemovingMod(null);
+    }
+  }
+
   async function onRevertPlan() {
     if (!selectedDate || busy) return;
     const ok = window.confirm(
@@ -388,18 +415,31 @@ export function DashboardPage({
 
   async function onApplyScenario(scenarioType: string, name: string) {
     if (!selectedDate || applyingScenario) return;
+    const isBaseline = scenarioType === "CURRENT_PLAN";
     const ok = window.confirm(
-      `Replace the current plan for ${selectedDate} with the "${name}" plan?\n\n` +
-        "This re-solves the day and recomputes risks, deliveries and " +
-        "recommendations against the new plan."
+      isBaseline
+        ? `Switch ${selectedDate} back to the original current plan?\n\n` +
+            "This restores the baseline schedule and recomputes risks, " +
+            "deliveries and recommendations against it."
+        : `Replace the current plan for ${selectedDate} with the "${name}" plan?\n\n` +
+            "This re-solves the day and recomputes risks, deliveries and " +
+            "recommendations against the new plan."
     );
     if (!ok) return;
     setApplyingScenario(name);
-    setStatus(`Applying "${name}" as the plan for ${selectedDate}…`);
+    setStatus(
+      isBaseline
+        ? `Switching ${selectedDate} back to the current plan…`
+        : `Applying "${name}" as the plan for ${selectedDate}…`
+    );
     try {
       await api.applyScenario(selectedDate, scenarioType);
       await loadResults(selectedDate);
-      setStatus(`"${name}" is now the current plan for ${selectedDate}.`);
+      setStatus(
+        isBaseline
+          ? `${selectedDate} is back on the current plan.`
+          : `"${name}" is now the current plan for ${selectedDate}.`
+      );
     } catch {
       setStatus(`Failed to apply the "${name}" plan.`);
     } finally {
@@ -549,6 +589,17 @@ export function DashboardPage({
     : 0;
   // The selected day is a forward "next day plan" when it is beyond today.
   const isNextDayPlan = selectedDate > today;
+  // Any long-running mutation (planning / applying / mitigating / removing /
+  // reverting) — while one is in flight the whole plan is being recomputed, so
+  // the content area shows the loading skeleton instead of a stale plan.
+  const mutating =
+    busy ||
+    replanningOrders ||
+    applyingScenario !== null ||
+    mitigatingRisk !== null ||
+    reapplyingMod !== null ||
+    removingMod !== null;
+  const showSkeleton = loading || mutating;
   const dateOptions =
     nextDayPlan && !dates.includes(nextDayPlan) ? [...dates, nextDayPlan] : dates;
   const visibleTabs = isNextDayPlan
@@ -619,9 +670,9 @@ export function DashboardPage({
         </div>
       )}
 
-      {loading && <DashboardSkeleton />}
+      {showSkeleton && <DashboardSkeleton />}
 
-      {!loading && data && (
+      {!showSkeleton && data && (
         <>
           <section className="kpi-section">
             <KpiDashboard kpis={data.kpis} />
@@ -731,7 +782,9 @@ export function DashboardPage({
                 <p className="empty">No drift data for this day.</p>
               ))}
             {tab === "materials" &&
-              (materials ? (
+              (materialsLoading ? (
+                <PanelSkeleton />
+              ) : materials ? (
                 <MaterialsPanel report={materials} />
               ) : (
                 <p className="empty">No materials data for this day.</p>
@@ -754,6 +807,7 @@ export function DashboardPage({
                 comparison={data.scenarios}
                 onApply={onApplyScenario}
                 applying={applyingScenario}
+                committedType={data.scenarios.committed_type}
                 onSelect={setSelectedScenarioType}
               />
             )}
@@ -767,6 +821,8 @@ export function DashboardPage({
                   reverting={busy}
                   onReapply={onReapplyModification}
                   reapplying={reapplyingMod}
+                  onRemove={onRemoveModification}
+                  removing={removingMod}
                 />
               ) : (
                 <p className="empty">
@@ -778,7 +834,7 @@ export function DashboardPage({
         </>
       )}
 
-      {!loading && !data && (
+      {!showSkeleton && !data && (
         <section className="tab-panel">
           {selectedDate ? (
             <div className="empty">

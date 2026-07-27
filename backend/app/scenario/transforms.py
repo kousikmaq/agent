@@ -2,8 +2,15 @@
 
 Each transform takes a *clone* of the factory state and applies a what-if
 change using levers the CP-SAT model actually responds to (machine earliest
-availability, usable machines, machine parallelism). Transforms never mutate the
-original snapshot - the engine always passes a deep copy.
+availability, usable machines, machine parallelism, and qualified-worker
+capacity). Transforms never mutate the original snapshot - the engine always
+passes a deep copy.
+
+Note on "working hours": the scheduler models time continuously (single
+operations can run for >24h, so they cannot be confined to a daily shift
+window). "Overtime" therefore cannot add clock hours; instead it adds parallel
+labour capacity (extra qualified worker slots), which is the lever the CP-SAT
+workforce constraint actually responds to under load.
 """
 
 from __future__ import annotations
@@ -11,13 +18,72 @@ from __future__ import annotations
 from datetime import datetime, time
 from typing import Any
 
-from app.domain.enums import MachineStatus, MaintenanceType
+from app.domain.enums import (
+    MachineStatus,
+    MaintenanceType,
+    WorkerAvailabilityStatus,
+)
 from app.domain.models.factory_state import FactoryState
 from app.domain.models.machine import Machine, MachineAvailability
+from app.domain.models.workforce import Worker, WorkerSkill
 from app.utils.datetime_utils import parse_business_date
 
 _DEFAULT_START = time(6, 0)
 _DEFAULT_END = time(22, 0)
+
+
+def _available_worker_ids(state: FactoryState, business_date) -> set[str]:
+    """Worker ids available on the business date (mirrors the solver's rule).
+
+    A worker is unavailable only if they have a same-day record whose status is
+    not AVAILABLE (leave/sick/training); everyone else is available.
+    """
+    unavailable = {
+        record.worker_id
+        for record in state.worker_availability
+        if record.day == business_date
+        and record.status != WorkerAvailabilityStatus.AVAILABLE
+    }
+    return {w.worker_id for w in state.workers if w.worker_id not in unavailable}
+
+
+def _add_worker_crew(
+    state: FactoryState, business_date, suffix: str, crew_label: str
+) -> None:
+    """Clone each available worker (with their skills) as an extra crew.
+
+    Adds parallel labour capacity for every skill the current workforce holds,
+    so the CP-SAT workforce no-overlap constraint has more qualified workers to
+    staff concurrent operations. New workers carry no availability record, so
+    the solver treats them as available.
+    """
+    available = _available_worker_ids(state, business_date)
+    skills_by_worker: dict[str, list[WorkerSkill]] = {}
+    for skill in state.worker_skills:
+        skills_by_worker.setdefault(skill.worker_id, []).append(skill)
+
+    for worker in list(state.workers):
+        if worker.worker_id not in available:
+            continue
+        crew_id = f"{worker.worker_id}{suffix}"
+        state.workers.append(
+            Worker(
+                worker_id=crew_id,
+                name=f"{worker.name} ({crew_label})",
+                home_shift_id=worker.home_shift_id,
+                max_regular_minutes_per_day=worker.max_regular_minutes_per_day,
+                max_overtime_minutes_per_day=worker.max_overtime_minutes_per_day,
+                overtime_allowed=True,
+            )
+        )
+        for skill in skills_by_worker.get(worker.worker_id, []):
+            state.worker_skills.append(
+                WorkerSkill(
+                    worker_id=crew_id,
+                    skill=skill.skill,
+                    proficiency=skill.proficiency,
+                )
+            )
 
 
 def _operating_window(state: FactoryState, business_date) -> tuple[time, time]:
@@ -43,21 +109,26 @@ def apply_current_plan(state: FactoryState, params: dict[str, Any]) -> FactorySt
 
 
 def apply_overtime(state: FactoryState, params: dict[str, Any]) -> FactoryState:
-    """Overtime enabled: extend labour coverage so machines run longer.
+    """Overtime enabled: extend labour coverage so more work runs in parallel.
 
-    Three solver-visible levers realise the extra working hours:
+    This is the *labour* lever (no extra machines). Because the scheduler models
+    time continuously, overtime cannot add clock hours; it instead adds parallel
+    qualified-worker capacity -- the existing crew working an overtime shift --
+    which the CP-SAT workforce constraint responds to when skilled labour is the
+    bottleneck. Concretely:
 
-    * machine availability is brought forward to the start of day, so
-      operations can begin earlier (the earliest-start lever);
-    * every worker is flagged as overtime-eligible (used by the cost model and
-      recommendations); and
-    * planned *preventive* maintenance is deferred out of the horizon, because
-      the extra staffing keeps machines running through what would otherwise be
-      planned downtime. This frees genuine machine capacity that the scheduler
-      can use, which is what distinguishes overtime from the baseline. (Breakdown
-      maintenance is left untouched -- returning down machines to service is the
-      Alternate Machines scenario, not this one.)
+    * every available worker gains an overtime twin with the same skills, so
+      more same-skill operations can be staffed concurrently;
+    * machine availability is brought forward to the start of day (earliest-start
+      lever); every worker is flagged overtime-eligible (cost model); and
+    * planned *preventive* maintenance is deferred out of the horizon, since the
+      extra staffing keeps machines running through planned downtime. (Breakdown
+      maintenance is left untouched -- repairing down machines is the Alternate
+      Machines scenario.)
     """
+    business_date = parse_business_date(state.business_date)
+    _add_worker_crew(state, business_date, suffix="-OT", crew_label="Overtime")
+
     for window in state.machine_availability:
         window.available_from = datetime.combine(window.day, time(0, 0))
     for worker in state.workers:
@@ -152,12 +223,20 @@ def apply_alternate_machines(state: FactoryState, params: dict[str, Any]) -> Fac
 
 
 def apply_additional_shift(state: FactoryState, params: dict[str, Any]) -> FactoryState:
-    """Additional shift: add a parallel night-shift machine per existing machine.
+    """Additional shift: add a full parallel night shift (machines **and** crew).
 
-    Doubling machine capacity (and extending operation eligibility to the new
-    machines) increases parallelism, shortening the critical path. Each night
-    machine inherits its source machine's availability windows so it is usable
-    exactly when the source is.
+    A real extra shift adds both equipment and the people to run it, so this
+    transform:
+
+    * adds a parallel night-shift machine per existing machine (doubling machine
+      capacity and extending operation eligibility to the new machines); and
+    * adds a night crew -- an extra qualified worker per available worker -- so
+      the new machines can actually be staffed.
+
+    Adding both resources increases parallelism on whichever of machines or
+    skilled labour is binding, shortening the critical path. Each night machine
+    inherits its source machine's availability windows so it is usable exactly
+    when the source is.
     """
     suffix = params.get("suffix", "-N")
 
@@ -206,4 +285,9 @@ def apply_additional_shift(state: FactoryState, params: dict[str, Any]) -> Facto
                     *operation.eligible_machine_ids,
                     *extra,
                 ]
+
+    # Staff the new shift: add a night crew mirroring the current workforce so
+    # the extra machines can actually be run.
+    business_date = parse_business_date(state.business_date)
+    _add_worker_crew(state, business_date, suffix="-N", crew_label="Night")
     return state
