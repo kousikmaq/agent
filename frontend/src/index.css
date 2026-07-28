@@ -422,6 +422,19 @@ button.primary:hover:not(:disabled) {
   background: var(--surface-2);
   border-radius: 4px;
 }
+.gantt-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.gantt-gridline.day {
+  opacity: 0.9;
+  background: var(--muted);
+}
 .gantt-bar {
   position: absolute;
   top: 3px;

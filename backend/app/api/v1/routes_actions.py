@@ -23,6 +23,7 @@ from app.analytics.weekly import build_weekly_plan
 from app.api.v1.deps import get_data_source, get_email_service, get_results_store
 from app.api.v1.schemas import (
     EmailActionResponse,
+    EmailChatRequest,
     EmailPreviewResponse,
     EmailReportRequest,
     EmailRisksRequest,
@@ -34,6 +35,7 @@ from app.ingestion import CsvDataSource
 from app.notifications import (
     ROLES,
     EmailService,
+    render_chat_email,
     render_purchase_order_email,
     render_report_email,
     render_risk_email,
@@ -208,6 +210,30 @@ async def place_order(
         order_id=request.order_id,
         needed_by=request.needed_by,
         reason=request.reason,
+    )
+    return _dispatch(
+        email, subject, html, text, to=request.to, preview=request.preview
+    )
+
+
+@router.post(
+    "/{business_date}/email-chat",
+    response_model=EmailActionResponse | EmailPreviewResponse,
+    summary="Email (or preview) the current assistant conversation",
+)
+async def email_chat(
+    business_date: str,
+    request: EmailChatRequest,
+    email: Annotated[EmailService, Depends(get_email_service)],
+) -> EmailActionResponse | EmailPreviewResponse:
+    """Compose and send (or preview) an email of the assistant conversation.
+
+    The email body is built entirely from the chat content the caller supplies,
+    so what is sent reflects that particular conversation (no fixed report).
+    """
+    subject, html, text = render_chat_email(
+        business_date,
+        [{"role": m.role, "text": m.text} for m in request.messages],
     )
     return _dispatch(
         email, subject, html, text, to=request.to, preview=request.preview

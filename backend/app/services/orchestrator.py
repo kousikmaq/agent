@@ -18,10 +18,17 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.analytics import AnalyticsEngine
+from app.analytics.deliveries import build_delivery_report
 from app.analytics.materials import build_materials_report
+from app.config import get_settings
 from app.core.logging import get_logger
 from app.core.exceptions import NotFoundError, ValidationError
-from app.domain.enums import RecommendationAction, ScenarioType
+from app.domain.enums import (
+    RecommendationAction,
+    RecommendationFeasibility,
+    RiskType,
+    ScenarioType,
+)
 from app.domain.models.analytics import KpiSet
 from app.domain.models.explanation import ExplanationContext
 from app.domain.models.modifications import PlanModification, PlanModifications
@@ -835,6 +842,408 @@ class PlanningOrchestrator:
         )
         return {"placed": placed, "skipped_existing": skipped, "count": len(placed)}
 
+    # -- Autonomous plan optimisation --------------------------------------
+    def auto_commit_best(
+        self,
+        business_date: str,
+        min_otd_gain: float | None = None,
+        max_cost_increase: float | None = None,
+    ) -> dict:
+        """Auto-commit the best what-if plan when it clearly beats the current one.
+
+        Picks the scenario with the highest on-time delivery; commits it only if
+        OTD improves by at least ``min_otd_gain`` AND cost rises by no more than
+        ``max_cost_increase`` vs the currently committed plan. Reversible.
+        """
+        s = get_settings()
+        min_gain = min_otd_gain if min_otd_gain is not None else s.auto_commit_min_otd_gain
+        max_cost = (
+            max_cost_increase
+            if max_cost_increase is not None
+            else s.auto_commit_max_cost_increase
+        )
+        scenarios = self._store.load_scenarios(business_date)
+        if scenarios is None or not scenarios.results:
+            return {"committed": False, "reason": "no scenarios"}
+        committed = next(
+            (r for r in scenarios.results if r.scenario_type == scenarios.committed_type),
+            None,
+        )
+        if committed is None:
+            return {"committed": False, "reason": "no committed row"}
+        cur_otd = committed.kpis.get("on_time_delivery_rate", 0.0)
+        cur_cost = committed.kpis.get("cost_total", 0.0)
+        candidates = [
+            r for r in scenarios.results if r.scenario_type != scenarios.committed_type
+        ]
+        if not candidates:
+            return {"committed": False, "reason": "no alternatives"}
+        best = max(candidates, key=lambda r: r.kpis.get("on_time_delivery_rate", 0.0))
+        gain = best.kpis.get("on_time_delivery_rate", 0.0) - cur_otd
+        cost_delta = best.kpis.get("cost_total", 0.0) - cur_cost
+        summary = {
+            "committed": False,
+            "from": str(scenarios.committed_type.value),
+            "best": str(best.scenario_type.value),
+            "otd_gain": round(gain, 4),
+            "cost_delta": round(cost_delta, 2),
+        }
+        if gain >= min_gain and cost_delta <= max_cost:
+            self.apply_scenario(business_date, best.scenario_type)
+            summary["committed"] = True
+            logger.info(
+                "Auto-commit %s: switched to '%s' (OTD +%.1f%%, cost %+.0f).",
+                business_date,
+                best.scenario_type.value,
+                gain * 100,
+                cost_delta,
+            )
+        else:
+            summary["reason"] = "thresholds not met"
+        return summary
+
+    def auto_rebalance(
+        self,
+        business_date: str,
+        util_threshold: float | None = None,
+        alt_util_max: float | None = None,
+    ) -> dict:
+        """Relieve a machine bottleneck by switching to the Alternate-Machines plan.
+
+        Triggers when the busiest machine is at/above ``util_threshold`` while
+        another sits below ``alt_util_max``; applies the Alternate-Machines plan
+        only if it shortens makespan or raises on-time delivery. Reversible.
+        """
+        from app.analytics.kpis import aggregate_schedule
+
+        s = get_settings()
+        hot = util_threshold if util_threshold is not None else s.auto_rebalance_util_threshold
+        cool = alt_util_max if alt_util_max is not None else s.auto_rebalance_alt_util_max
+
+        schedule = self._store.load_schedule(business_date)
+        kpis = self._store.load_kpis(business_date)
+        if schedule is None or kpis is None:
+            return {"rebalanced": False, "reason": "no plan"}
+        state = self._loader.load(business_date)
+        agg = aggregate_schedule(state, schedule)
+        utils = [m.utilization for m in agg.machine_usage]
+        if not utils:
+            return {"rebalanced": False, "reason": "no machine usage"}
+        max_util, min_util = max(utils), min(utils)
+        if not (max_util >= hot and min_util < cool):
+            return {
+                "rebalanced": False,
+                "reason": "no bottleneck",
+                "max_util": round(max_util, 3),
+            }
+        scenarios = self._store.load_scenarios(business_date)
+        alt = (
+            next(
+                (r for r in scenarios.results
+                 if r.scenario_type == ScenarioType.ALTERNATE_MACHINES),
+                None,
+            )
+            if scenarios
+            else None
+        )
+        if alt is None:
+            return {"rebalanced": False, "reason": "no alternate plan"}
+        cur_makespan = kpis.metrics.get("makespan_minutes", float("inf"))
+        cur_otd = kpis.on_time_delivery_rate or 0.0
+        alt_makespan = alt.kpis.get("makespan_minutes", float("inf"))
+        alt_otd = alt.kpis.get("on_time_delivery_rate", 0.0)
+        if alt_makespan < cur_makespan or alt_otd > cur_otd:
+            self.apply_scenario(business_date, ScenarioType.ALTERNATE_MACHINES)
+            logger.info(
+                "Auto-rebalance %s: bottleneck util=%.2f -> applied Alternate Machines.",
+                business_date,
+                max_util,
+            )
+            return {
+                "rebalanced": True,
+                "bottleneck_util": round(max_util, 3),
+                "makespan_before": cur_makespan,
+                "makespan_after": alt_makespan,
+            }
+        return {"rebalanced": False, "reason": "alternate not better"}
+
+    def send_morning_briefing(self, business_date: str, actions: dict) -> bool:
+        """Email one daily briefing: plan summary, risk alert, and agent actions."""
+        try:
+            from app.notifications import EmailService
+
+            kpis = self._store.load_kpis(business_date)
+            risks = self._store.load_risks(business_date)
+            settings = get_settings()
+            critical = 0
+            if risks is not None:
+                critical = sum(
+                    1
+                    for r in risks.risks
+                    if str(r.severity) in ("CRITICAL", "HIGH")
+                )
+
+            def pct(v: object) -> str:
+                return f"{v * 100:.1f}%" if isinstance(v, (int, float)) else "n/a"
+
+            otd = kpis.on_time_delivery_rate if kpis else None
+            cost = kpis.metrics.get("cost_total") if kpis else None
+            makespan = kpis.metrics.get("makespan_minutes") if kpis else None
+
+            did: list[str] = []
+            rem = actions.get("remediate") or {}
+            if rem.get("triggered"):
+                did.append(
+                    f"prioritised {len(rem.get('critical_orders', []))} high-priority late order(s)"
+                )
+            reo = actions.get("reorder") or {}
+            if reo.get("count"):
+                did.append(f"placed {reo['count']} purchase order(s)")
+            cb = actions.get("commit_best") or {}
+            if cb.get("committed"):
+                did.append(f"switched to the '{cb.get('best')}' plan")
+            rb = actions.get("rebalance") or {}
+            if rb.get("rebalanced"):
+                did.append("re-balanced a machine bottleneck")
+            rc = actions.get("conflicts") or {}
+            if rc.get("resolved"):
+                did.append(f"auto-resolved {rc.get('count')} scheduling conflict(s)")
+            ot = actions.get("overtime") or {}
+            if ot.get("applied"):
+                did.append(
+                    f"enabled overtime ({ot.get('at_risk')} at-risk order(s))"
+                )
+            esc = actions.get("escalation") or {}
+            if esc.get("escalated"):
+                did.append(f"escalated {esc.get('count')} severely late order(s)")
+            did_html = (
+                "<ul>" + "".join(f"<li>{d}</li>" for d in did) + "</ul>"
+                if did
+                else "<p>No autonomous changes were needed.</p>"
+            )
+            alert_html = (
+                f"<p style='color:#c0392b'><b>⚠ Risk alert:</b> {critical} critical/high "
+                f"risks (threshold {settings.briefing_critical_risk_threshold}).</p>"
+                if critical >= settings.briefing_critical_risk_threshold
+                else ""
+            )
+            html = (
+                f"<h3>Daily plan briefing — {business_date}</h3>"
+                f"<p><b>On-time delivery:</b> {pct(otd)} &nbsp; "
+                f"<b>Est. cost:</b> {('$%0.0f' % cost) if isinstance(cost,(int,float)) else 'n/a'} &nbsp; "
+                f"<b>Makespan:</b> {(f'{makespan/1440:.1f} d') if isinstance(makespan,(int,float)) else 'n/a'}</p>"
+                f"{alert_html}"
+                f"<p><b>What the agent did overnight:</b></p>{did_html}"
+                f"<p style='color:#888'>Automated briefing from the Production Planning Agent.</p>"
+            )
+            EmailService().send_html(
+                subject=f"[PPO] Daily plan briefing — {business_date}",
+                html_body=html,
+            )
+            logger.info("Morning briefing emailed for %s.", business_date)
+            return True
+        except Exception:  # noqa: BLE001 - notifications must never break planning
+            logger.exception("Morning briefing failed for %s.", business_date)
+            return False
+
+    @staticmethod
+    def _send_summary_email(subject: str, html: str, to: str | None = None) -> bool:
+        """Send a summary/notification email; never raises (returns a flag)."""
+        try:
+            from app.notifications import EmailService
+
+            EmailService().send_html(subject=subject, html_body=html, to=to)
+            return True
+        except Exception:  # noqa: BLE001 - notifications must never break planning
+            logger.exception("Summary email failed: %s", subject)
+            return False
+
+    def resolve_conflicts(self, business_date: str) -> dict:
+        """Auto-resolve simple conflicts and email the supervisor a summary.
+
+        Applies feasible reassign-worker / reschedule-maintenance fixes for any
+        worker- or maintenance-conflict risks (one combined re-solve, logged and
+        reversible), then emails a summary of actions to the supervisor.
+        """
+        risks = self._store.load_risks(business_date)
+        recs = self._store.load_recommendations(business_date)
+        if risks is None or recs is None:
+            return {"resolved": False, "reason": "no data", "count": 0}
+        conflict_types = {RiskType.WORKER_CONFLICT, RiskType.MAINTENANCE_CONFLICT}
+        conflict_ids = {r.risk_id for r in risks.risks if r.risk_type in conflict_types}
+        if not conflict_ids:
+            return {"resolved": False, "reason": "no conflicts", "count": 0}
+        safe = {
+            RecommendationAction.ASSIGN_ALTERNATE_WORKER,
+            RecommendationAction.RESCHEDULE_MAINTENANCE,
+        }
+        seen: set = set()
+        actions: list[tuple[str, dict[str, list[str]]]] = []
+        labels: list[str] = []
+        for rec in recs.recommendations:
+            if rec.feasibility != RecommendationFeasibility.FEASIBLE:
+                continue
+            if rec.action not in safe:
+                continue
+            if not (set(rec.addresses_risk_ids) & conflict_ids):
+                continue
+            key = (
+                rec.action.value,
+                tuple(sorted((k, tuple(v)) for k, v in rec.target_entities.items())),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            actions.append((rec.action.value, rec.target_entities))
+            labels.append(rec.title)
+        if not actions:
+            return {"resolved": False, "reason": "no feasible conflict fixes", "count": 0}
+        self.apply_fixes(business_date, actions=actions)
+        s = get_settings()
+        to = s.supervisor_email or s.alert_email_to
+        items = "".join(f"<li>{lbl}</li>" for lbl in labels)
+        html = (
+            f"<h3>Conflicts auto-resolved — {business_date}</h3>"
+            f"<p>The agent resolved <b>{len(actions)}</b> scheduling conflict(s) "
+            f"and re-planned the day:</p><ul>{items}</ul>"
+            f"<p style='color:#888'>Reversible actions recorded in the Current Plan log.</p>"
+        )
+        emailed = self._send_summary_email(
+            f"[PPO] Conflicts auto-resolved — {business_date}", html, to=to
+        )
+        logger.info(
+            "Auto-resolve conflicts %s: applied %d fix(es).", business_date, len(actions)
+        )
+        return {"resolved": True, "count": len(actions), "emailed": emailed}
+
+    def overtime_on_risk(self, business_date: str, threshold: int | None = None) -> dict:
+        """Apply the Overtime plan when delivery risk is high and it improves OTD."""
+        s = get_settings()
+        thr = threshold if threshold is not None else s.overtime_risk_threshold
+        schedule = self._store.load_schedule(business_date)
+        kpis = self._store.load_kpis(business_date)
+        if schedule is None or kpis is None:
+            return {"applied": False, "reason": "no plan"}
+        state = self._loader.load(business_date)
+        rep = build_delivery_report(state, schedule)
+        at_risk = rep.at_risk + rep.late
+        if at_risk < thr:
+            return {"applied": False, "reason": "risk below threshold", "at_risk": at_risk}
+        scenarios = self._store.load_scenarios(business_date)
+        ot = (
+            next(
+                (r for r in scenarios.results
+                 if r.scenario_type == ScenarioType.OVERTIME_ENABLED),
+                None,
+            )
+            if scenarios
+            else None
+        )
+        cur_otd = kpis.on_time_delivery_rate or 0.0
+        if ot is not None and ot.kpis.get("on_time_delivery_rate", 0.0) > cur_otd:
+            self.apply_scenario(business_date, ScenarioType.OVERTIME_ENABLED)
+            logger.info(
+                "Overtime-on-risk %s: %d at-risk -> applied Overtime.",
+                business_date,
+                at_risk,
+            )
+            return {
+                "applied": True,
+                "at_risk": at_risk,
+                "otd_after": ot.kpis.get("on_time_delivery_rate"),
+            }
+        return {"applied": False, "reason": "overtime not better", "at_risk": at_risk}
+
+    def check_escalation(self, business_date: str) -> dict:
+        """Escalate by email when orders are projected late beyond the threshold."""
+        s = get_settings()
+        schedule = self._store.load_schedule(business_date)
+        if schedule is None:
+            return {"escalated": False, "reason": "no plan"}
+        state = self._loader.load(business_date)
+        rep = build_delivery_report(state, schedule)
+        thr_min = max(0, s.escalation_lateness_days) * 1440
+        late = sorted(
+            (ln for ln in rep.lines if ln.tardiness_minutes >= thr_min),
+            key=lambda ln: ln.tardiness_minutes,
+            reverse=True,
+        )
+        if len(late) < max(1, s.escalation_min_orders):
+            return {"escalated": False, "count": len(late)}
+        to = s.escalation_email or s.supervisor_email or s.alert_email_to
+        items = "".join(
+            f"<li>{ln.order_id}: {ln.tardiness_minutes / 1440:.1f} days late "
+            f"(due {ln.due_date})</li>"
+            for ln in late[:20]
+        )
+        html = (
+            f"<h3 style='color:#c0392b'>\u26a0 Delivery escalation — {business_date}</h3>"
+            f"<p><b>{len(late)}</b> order(s) are projected late by "
+            f"\u2265 {s.escalation_lateness_days} days:</p><ul>{items}</ul>"
+            f"<p style='color:#888'>Automated escalation from the Production Planning Agent.</p>"
+        )
+        emailed = self._send_summary_email(
+            f"[PPO] ESCALATION: {len(late)} order(s) severely late — {business_date}",
+            html,
+            to=to,
+        )
+        logger.info("Escalation %s: %d order(s) >= %d days late.", business_date, len(late), s.escalation_lateness_days)
+        return {"escalated": True, "count": len(late), "emailed": emailed}
+
+    def run_autonomy(self, business_date: str, respect_flags: bool = True) -> dict:
+        """Run the autonomous action bundle for a day and return a combined summary.
+
+        Order (a coherent decision tree so plan changes never conflict):
+        1. reorder low materials (orthogonal to the schedule);
+        2. pick the plan — only the first that applies changes the committed plan:
+           a. resolve simple conflicts (correctness first);
+           b. auto-commit the best what-if if it clears the thresholds;
+           c. enable overtime when delivery risk is high and it improves OTD;
+           d. prioritise high-priority late orders;
+           e. relieve a machine bottleneck;
+        3. escalate severely late orders by email (orthogonal notification);
+        4. email a daily briefing summarising everything.
+
+        When ``respect_flags`` is True each step runs only if its setting is on
+        (used by the scheduler); when False every step is considered
+        (manual/on-demand).
+        """
+        s = get_settings()
+        summary: dict = {}
+
+        if not respect_flags or s.auto_reorder_enabled:
+            summary["reorder"] = self.auto_reorder(business_date)
+
+        plan_changed = False
+        if not respect_flags or s.auto_resolve_conflicts_enabled:
+            rc = self.resolve_conflicts(business_date)
+            summary["conflicts"] = rc
+            plan_changed = bool(rc.get("resolved"))
+        if not plan_changed and (not respect_flags or s.auto_commit_best_enabled):
+            cb = self.auto_commit_best(business_date)
+            summary["commit_best"] = cb
+            plan_changed = bool(cb.get("committed"))
+        if not plan_changed and (not respect_flags or s.auto_overtime_on_risk_enabled):
+            ot = self.overtime_on_risk(business_date)
+            summary["overtime"] = ot
+            plan_changed = bool(ot.get("applied"))
+        if not plan_changed and (not respect_flags or s.auto_replan_enabled):
+            rem = self.auto_remediate(
+                business_date, priority_max=s.auto_replan_priority_max, notify=False
+            )
+            summary["remediate"] = rem
+            plan_changed = bool(rem.get("triggered"))
+        if not plan_changed and (not respect_flags or s.auto_rebalance_enabled):
+            rb = self.auto_rebalance(business_date)
+            summary["rebalance"] = rb
+            plan_changed = bool(rb.get("rebalanced"))
+
+        if not respect_flags or s.auto_escalation_enabled:
+            summary["escalation"] = self.check_escalation(business_date)
+
+        if not respect_flags or s.auto_briefing_enabled:
+            summary["briefing_sent"] = self.send_morning_briefing(business_date, summary)
+        return summary
 
     def apply_order_priorities(
         self,
@@ -1081,6 +1490,75 @@ class PlanningOrchestrator:
                 modifications=remaining,
             )
         )
+        return result
+
+    def revert_to_original(
+        self,
+        business_date: str,
+        options: SolverOptions | None = None,
+    ) -> PlanningResult:
+        """Discard all modifications and restore the original baseline plan (fast).
+
+        Reuses the baseline schedule the morning run persisted (no re-solve and
+        no re-run of the four what-if scenarios), recomputes only the lightweight
+        downstream analytics from the original state, clears the modification
+        log, and marks the baseline as the committed plan. This makes reverting
+        near-instant compared with re-running the full pipeline.
+        """
+        options = options or self._default_options
+        mods = self._store.load_modifications(business_date)
+        state = self._loader.load(business_date)
+
+        baseline_schedule = self._store.load_scenario_schedule(
+            business_date, ScenarioType.CURRENT_PLAN
+        )
+        if baseline_schedule is not None:
+            schedule = baseline_schedule
+        else:
+            policy = self._rules.evaluate(state)
+            schedule = SchedulingSolver(options).solve(state, policy)
+
+        kpis = self._analytics.compute(state, schedule)
+        risks = self._risk.detect(state, schedule, kpis)
+        recommendations = self._recommendation.recommend(state, schedule, risks)
+
+        existing = self._store.load_scenarios(business_date)
+        if existing is not None:
+            scenario_comparison = _comparison_with_applied(
+                existing, ScenarioType.CURRENT_PLAN, kpis
+            )
+        else:
+            scenario_comparison = _light_comparison(business_date, kpis)
+
+        context = self._explanation.build(
+            business_date=business_date,
+            schedule=schedule,
+            kpis=kpis,
+            risks=risks,
+            recommendations=recommendations,
+            scenario_comparison=scenario_comparison,
+        )
+        summary = self._explanation.summarize(context)
+        result = PlanningResult(
+            business_date=business_date,
+            schedule=schedule,
+            kpis=kpis,
+            risks=risks,
+            recommendations=recommendations,
+            scenario_comparison=scenario_comparison,
+        )
+        self._store.save(result, context, summary)
+        self._store.save_modifications(
+            PlanModifications(
+                business_date=business_date,
+                baseline_kpis=(
+                    mods.baseline_kpis if mods else extract_scenario_kpis(kpis)
+                ),
+                current_kpis=extract_scenario_kpis(kpis),
+                modifications=[],
+            )
+        )
+        logger.info("Reverted %s to the original baseline plan.", business_date)
         return result
 
     def get_or_run(

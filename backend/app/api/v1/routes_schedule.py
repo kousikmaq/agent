@@ -93,6 +93,37 @@ async def auto_remediate(
     )
 
 
+@router.post(
+    "/{business_date}/run-autonomy",
+    summary="Run the full autonomous action bundle for a day",
+)
+async def run_autonomy(
+    business_date: str,
+    orchestrator: Annotated[PlanningOrchestrator, Depends(get_orchestrator)],
+) -> dict:
+    """Run every autonomous step now (remediate, reorder, auto-commit best plan,
+    bottleneck rebalance, briefing email) and return a combined summary."""
+    return orchestrator.run_autonomy(business_date, respect_flags=False)
+
+
+@router.post(
+    "/{business_date}/revert",
+    response_model=ScheduleResult,
+    summary="Revert to the original baseline plan (fast, no re-solve)",
+)
+async def revert_plan(
+    business_date: str,
+    orchestrator: Annotated[PlanningOrchestrator, Depends(get_orchestrator)],
+) -> ScheduleResult:
+    """Discard all modifications and restore the original baseline plan.
+
+    Reuses the persisted baseline schedule instead of re-running the solver and
+    the what-if scenarios, so it returns near-instantly.
+    """
+    result = orchestrator.revert_to_original(business_date)
+    return result.schedule
+
+
 @router.get("/{business_date}", response_model=ScheduleResult, summary="Get a schedule")
 async def get_schedule(
     business_date: str,

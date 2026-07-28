@@ -245,6 +245,29 @@ class EmailPreviewResponse(BaseModel):
     recipient: str = Field(..., description="Address the email would be sent to.")
 
 
+class ChatMessagePayload(BaseModel):
+    """A single assistant-conversation message."""
+
+    role: str = Field(..., description="Message author: 'user' or 'assistant'.")
+    text: str = Field(..., description="Message content.")
+
+
+class EmailChatRequest(BaseModel):
+    """Request to email (or preview) the current assistant conversation."""
+
+    messages: list[ChatMessagePayload] = Field(
+        ..., min_length=1, description="Conversation to email, in order."
+    )
+    to: str | None = Field(
+        default=None,
+        description="Optional recipient override; defaults to ALERT_EMAIL_TO.",
+    )
+    preview: bool = Field(
+        default=False,
+        description="When true, render and return the email without sending it.",
+    )
+
+
 class RolesResponse(BaseModel):
     """Available operational roles a report can be addressed to."""
 

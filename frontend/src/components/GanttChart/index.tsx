@@ -140,6 +140,14 @@ export function GanttChart({ operations, date }: Props) {
                 {orderId}
               </div>
               <div className="gantt-track">
+                {ticks.map((t, i) => (
+                  <span
+                    key={`gl-${i}`}
+                    className={`gantt-gridline${t.day ? " day" : ""}`}
+                    style={{ left: `${t.fraction * 100}%` }}
+                    aria-hidden="true"
+                  />
+                ))}
                 {ops.map((op) => {
                   const left =
                     ((new Date(op.start).getTime() - min) / span) * 100;

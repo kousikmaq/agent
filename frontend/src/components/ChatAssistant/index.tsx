@@ -32,24 +32,8 @@ interface QuickAction {
 }
 
 /** Derive agentic follow-up actions from an assistant answer. */
-function suggestedActions(text: string, date: string): QuickAction[] {
+function suggestedActions(text: string): QuickAction[] {
   const actions: QuickAction[] = [];
-  if (/\b(?:risk|late|bottleneck|overdue|delay)/i.test(text)) {
-    actions.push({
-      key: "email-risks",
-      label: "✉ Email risk summary",
-      run: async () => {
-        const r = await api.emailReport(date, {
-          report_type: "risks",
-          preview: false,
-        });
-        toast(
-          `Risk summary emailed to ${"recipient" in r ? r.recipient : "the team"}`,
-          "success"
-        );
-      },
-    });
-  }
   const mat = text.match(MATERIAL_RE);
   if (mat) {
     const item = mat[1];
@@ -74,9 +58,9 @@ function suggestedActions(text: string, date: string): QuickAction[] {
 }
 
 /** Row of agentic action chips shown under an assistant answer. */
-function ActionChips({ text, date }: { text: string; date: string }) {
+function ActionChips({ text }: { text: string }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const actions = suggestedActions(text, date);
+  const actions = suggestedActions(text);
   if (actions.length === 0) return null;
   return (
     <div className="chat-actions">
@@ -144,6 +128,7 @@ export function ChatAssistant({ businessDate, onClose, seed }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [emailing, setEmailing] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const lastSeed = useRef<number | null>(null);
 
@@ -184,12 +169,40 @@ export function ChatAssistant({ businessDate, onClose, seed }: Props) {
     setShowSuggestions(false);
   };
 
+  // Email the current conversation exactly as it stands — the mail body is the
+  // chat content itself, not a fixed report.
+  const emailChat = async () => {
+    if (emailing || messages.length === 0) return;
+    setEmailing(true);
+    try {
+      const r = await api.emailChat(businessDate, {
+        messages: messages.map((m) => ({ role: m.role, text: m.text })),
+      });
+      toast(
+        `Conversation emailed to ${"recipient" in r ? r.recipient : "the team"}`,
+        "success"
+      );
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to send email", "error");
+    } finally {
+      setEmailing(false);
+    }
+  };
+
   return (
     <div className="chat">
       {onClose && (
         <div className="chat-header">
           <span className="chat-title">Assistant</span>
           <div className="chat-header-actions">
+            <button
+              className="chat-clear"
+              onClick={emailChat}
+              disabled={emailing || busy || messages.length === 0}
+              title="Email this conversation"
+            >
+              {emailing ? "Emailing…" : "✉ Email"}
+            </button>
             <button
               className="chat-clear"
               onClick={clearChat}
@@ -235,7 +248,7 @@ export function ChatAssistant({ businessDate, onClose, seed }: Props) {
             <span className="chat-role">{m.role === "user" ? "You" : "Assistant"}</span>
             <div className="chat-text">{m.text}</div>
             {m.role === "assistant" && (
-              <ActionChips text={m.text} date={businessDate} />
+              <ActionChips text={m.text} />
             )}
           </div>
         ))}

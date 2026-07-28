@@ -95,6 +95,41 @@ class Settings(BaseSettings):
     # material, de-duplicated against orders already placed that day).
     auto_reorder_enabled: bool = False
 
+    # Auto-commit the best what-if scenario when it clearly beats the committed
+    # plan: on-time delivery improves by >= gain AND cost rises by <= increase.
+    auto_commit_best_enabled: bool = False
+    auto_commit_min_otd_gain: float = 0.03
+    auto_commit_max_cost_increase: float = 15000.0
+
+    # Auto-rebalance a machine bottleneck: when the busiest machine is at/above
+    # ``util_threshold`` while another sits below ``alt_util_max``, apply the
+    # Alternate-Machines plan if it shortens makespan or raises on-time delivery.
+    auto_rebalance_enabled: bool = False
+    auto_rebalance_util_threshold: float = 0.95
+    auto_rebalance_alt_util_max: float = 0.6
+
+    # Email one daily briefing (plan summary + what the agent did) after the
+    # morning cycle; flags a risk alert when critical risks reach the threshold.
+    auto_briefing_enabled: bool = False
+    briefing_critical_risk_threshold: int = 20
+
+    # Auto-resolve simple conflicts (reassign worker / reschedule maintenance)
+    # and email a summary of actions to the supervisor.
+    auto_resolve_conflicts_enabled: bool = False
+    supervisor_email: str | None = None
+
+    # Trigger overtime when delivery risk is high: apply the Overtime plan (if
+    # it improves on-time delivery) once at-risk + late orders reach the count.
+    auto_overtime_on_risk_enabled: bool = False
+    overtime_risk_threshold: int = 15
+
+    # Escalate by email when at least ``escalation_min_orders`` orders are
+    # projected late by >= ``escalation_lateness_days`` days.
+    auto_escalation_enabled: bool = False
+    escalation_lateness_days: int = 3
+    escalation_min_orders: int = 1
+    escalation_email: str | None = None
+
     # --- Azure OpenAI (used by the explanation/chat phase; optional here) ---
     azure_openai_endpoint: str | None = None
     azure_openai_deployment: str | None = None

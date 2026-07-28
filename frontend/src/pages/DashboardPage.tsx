@@ -146,6 +146,8 @@ export function DashboardPage({
   const [replanningOrders, setReplanningOrders] = useState(false);
   // Whether an autonomous remediation run is in progress.
   const [autoRemediating, setAutoRemediating] = useState(false);
+  // Whether the full autonomy bundle is running.
+  const [runningAutonomy, setRunningAutonomy] = useState(false);
   // The scenario currently selected on the Scenarios tab (for its email).
   const [selectedScenarioType, setSelectedScenarioType] = useState<string | null>(
     null
@@ -370,6 +372,55 @@ export function DashboardPage({
     }
   }
 
+  async function onRunAutonomy() {
+    if (!selectedDate || runningAutonomy) return;
+    const ok = window.confirm(
+      `Run the full agent autonomy for ${selectedDate}?\n\n` +
+        "The agent will: resolve simple conflicts, prioritise high-priority late " +
+        "orders, reorder low materials, auto-commit the best plan (within " +
+        "thresholds), enable overtime when delivery risk is high, relieve any " +
+        "bottleneck, escalate severely late orders, and email a briefing. All " +
+        "actions are reversible and logged."
+    );
+    if (!ok) return;
+    setRunningAutonomy(true);
+    setStatus(`Agent is running autonomous actions for ${selectedDate}…`);
+    try {
+      const r = (await api.runAutonomy(selectedDate)) as {
+        conflicts?: { resolved?: boolean; count?: number };
+        commit_best?: { committed?: boolean; best?: string };
+        overtime?: { applied?: boolean; at_risk?: number };
+        rebalance?: { rebalanced?: boolean };
+        reorder?: { count?: number };
+        remediate?: { triggered?: boolean; critical_orders?: string[] };
+        escalation?: { escalated?: boolean; count?: number };
+        briefing_sent?: boolean;
+      };
+      await loadResults(selectedDate);
+      const parts: string[] = [];
+      if (r.conflicts?.resolved)
+        parts.push(`resolved ${r.conflicts.count ?? 0} conflict(s)`);
+      if (r.remediate?.triggered)
+        parts.push(`prioritised ${r.remediate.critical_orders?.length ?? 0} order(s)`);
+      if (r.reorder?.count) parts.push(`placed ${r.reorder.count} PO(s)`);
+      if (r.commit_best?.committed) parts.push(`switched to '${r.commit_best.best}' plan`);
+      if (r.overtime?.applied) parts.push("enabled overtime");
+      if (r.rebalance?.rebalanced) parts.push("re-balanced a bottleneck");
+      if (r.escalation?.escalated)
+        parts.push(`escalated ${r.escalation.count ?? 0} late order(s)`);
+      if (r.briefing_sent) parts.push("emailed a briefing");
+      setStatus(
+        parts.length
+          ? `Agent autonomy for ${selectedDate}: ${parts.join(", ")}.`
+          : `Agent autonomy for ${selectedDate}: no changes were needed.`
+      );
+    } catch {
+      setStatus("Agent autonomy run failed.");
+    } finally {
+      setRunningAutonomy(false);
+    }
+  }
+
   async function onReapplyModification(m: PlanModification) {
     if (!selectedDate || reapplyingMod) return;
     const ok = window.confirm(
@@ -440,7 +491,7 @@ export function DashboardPage({
     setBusy(true);
     setStatus(`Reverting ${selectedDate} to the original plan…`);
     try {
-      await api.runSchedule(selectedDate, undefined, true);
+      await api.revertPlan(selectedDate);
       await loadResults(selectedDate);
       setStatus(`Reverted ${selectedDate} to the original plan.`);
     } catch {
@@ -633,6 +684,7 @@ export function DashboardPage({
     busy ||
     replanningOrders ||
     autoRemediating ||
+    runningAutonomy ||
     applyingScenario !== null ||
     mitigatingRisk !== null ||
     reapplyingMod !== null ||
@@ -759,6 +811,20 @@ export function DashboardPage({
                       🤖
                     </span>
                     {autoRemediating ? "Auto-remediating…" : "Auto-remediate high-priority"}
+                  </button>
+                )}
+                {tab === "risks" && (
+                  <button
+                    type="button"
+                    className="action-btn ab-ghost"
+                    onClick={onRunAutonomy}
+                    disabled={runningAutonomy}
+                    title="Run the full agent autonomy: remediate, reorder, auto-commit best plan, rebalance, and email a briefing"
+                  >
+                    <span className="ab-icon" aria-hidden>
+                      ⚡
+                    </span>
+                    {runningAutonomy ? "Running agent…" : "Run full autonomy"}
                   </button>
                 )}
                 <ReportEmailButton

@@ -11,6 +11,7 @@ import type {
   EmailReportRequest,
   EmailResult,
   EmailRisksRequest,
+  EmailChatRequest,
   FactorySnapshot,
   GenerateDataResponse,
   KpiSet,
@@ -84,6 +85,10 @@ export const api = {
       body: JSON.stringify({ business_date, max_time_seconds, force }),
     }),
 
+  /** Revert to the original baseline plan (fast: no re-solve, no scenario re-run). */
+  revertPlan: (date: string) =>
+    request<ScheduleResult>(`/schedule/${date}/revert`, { method: "POST" }),
+
   getSchedule: (date: string) => request<ScheduleResult>(`/schedule/${date}`),
   getKpis: (date: string) => request<KpiSet>(`/analytics/${date}`),
   getRisks: (date: string) => request<RiskReport>(`/risks/${date}`),
@@ -148,6 +153,11 @@ export const api = {
     request<AutoRemediateResult>(`/schedule/auto-remediate`, {
       method: "POST",
       body: JSON.stringify({ business_date: date, priority_max, notify }),
+    }),
+  /** Run the full autonomous action bundle for a day. */
+  runAutonomy: (date: string) =>
+    request<Record<string, unknown>>(`/schedule/${date}/run-autonomy`, {
+      method: "POST",
     }),
 
   applyScenario: (
@@ -220,6 +230,13 @@ export const api = {
 
   emailReport: (date: string, payload: EmailReportRequest) =>
     request<EmailResult>(`/actions/${date}/email-report`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Email the current assistant conversation (content-based, not a fixed report). */
+  emailChat: (date: string, payload: EmailChatRequest) =>
+    request<EmailResult>(`/actions/${date}/email-chat`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),

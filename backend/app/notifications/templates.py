@@ -215,3 +215,61 @@ def render_purchase_order_email(
         + (f"\n\nJustification: {reason}" if reason else "")
     )
     return subject, html, text
+
+
+def render_chat_email(
+    business_date: str,
+    messages: list[dict[str, str]],
+    *,
+    title: str = "Assistant Conversation",
+) -> tuple[str, str, str]:
+    """Render an assistant-conversation email; returns ``(subject, html, text)``.
+
+    Turns the current chat exchange into a professional, email-safe transcript
+    (question/answer bubbles) so a planner can share exactly what they discussed
+    with the assistant — no fixed report content.
+    """
+    bubbles: list[str] = []
+    for message in messages:
+        role = (message.get("role") or "").lower()
+        content = message.get("text") or ""
+        is_user = role == "user"
+        who = "You" if is_user else "Assistant"
+        bg = "#eef2ff" if is_user else _BG
+        border = _PRIMARY if is_user else _BORDER
+        align = "right" if is_user else "left"
+        safe = escape(content).replace("\n", "<br>")
+        bubbles.append(
+            f'<div style="margin:0 0 12px;text-align:{align};">'
+            f'<div style="display:inline-block;max-width:92%;text-align:left;'
+            f'border:1px solid {border};background:{bg};border-radius:12px;'
+            f'padding:10px 14px;font-size:14px;line-height:1.5;color:{_INK};">'
+            f'<div style="color:{_MUTED};text-transform:uppercase;letter-spacing:.06em;'
+            f'font-size:11px;margin-bottom:4px;">{who}</div>{safe}</div></div>'
+        )
+    body = "".join(bubbles) or (
+        f'<p style="color:{_MUTED};">No conversation to send.</p>'
+    )
+
+    first_q = next(
+        (m.get("text") for m in messages if (m.get("role") or "").lower() == "user"),
+        None,
+    )
+    snippet = (first_q or "Assistant conversation").strip().splitlines()[0]
+    if len(snippet) > 60:
+        snippet = snippet[:57] + "…"
+
+    intro = (
+        f"Assistant conversation for <strong>{escape(business_date)}</strong>, "
+        f"captured from the planning assistant."
+    )
+    subject = f"[PPO] Assistant — {snippet}"
+    html = _shell(title, intro, body)
+
+    text_lines = [f"Assistant conversation for {business_date}", ""]
+    for message in messages:
+        who = "You" if (message.get("role") or "").lower() == "user" else "Assistant"
+        text_lines.append(f"{who}: {message.get('text') or ''}")
+        text_lines.append("")
+    text = "\n".join(text_lines).rstrip() + "\n"
+    return subject, html, text

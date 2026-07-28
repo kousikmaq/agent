@@ -156,9 +156,14 @@ class ExplanationContextBuilder:
 
     @staticmethod
     def _late_orders(
-        schedule: ScheduleResult, risks: RiskReport, limit: int = 12
+        schedule: ScheduleResult, risks: RiskReport, limit: int = 60
     ) -> list[LateOrderDigest]:
-        """Late orders with their route (machines) and the risks causing delay."""
+        """Late orders with their route (machines) and the risks causing delay.
+
+        The cap is generous so the assistant can answer questions about any late
+        order on the day (not just the most tardy few); the count of late orders
+        per day is bounded by the order book, so this stays token-safe.
+        """
         # Machines used by each order, in scheduled order.
         machines_by_order: dict[str, list[str]] = {}
         for op in schedule.scheduled_operations:

@@ -128,10 +128,12 @@ async def get_context(
     store: Annotated[ResultsStore, Depends(get_results_store)],
 ) -> ExplanationSummary:
     """Return the curated explanation summary the assistant is grounded on."""
-    summary = store.load_summary(business_date)
-    if summary is None:
+    context = store.load_context(business_date)
+    if context is None:
         raise NotFoundError(
-            f"No explanation summary for {business_date}; run the pipeline first.",
+            f"No explanation context for {business_date}; run the pipeline first.",
             details={"business_date": business_date},
         )
-    return summary
+    # Re-summarize live (same source the assistant uses) so this view always
+    # reflects the current curation rules, not a possibly stale persisted file.
+    return ExplanationContextBuilder().summarize(context)

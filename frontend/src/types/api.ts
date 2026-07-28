@@ -171,6 +171,17 @@ export interface EmailReportRequest {
   scenario_type?: string | null;
 }
 
+export interface ChatMessagePayload {
+  role: string;
+  text: string;
+}
+
+export interface EmailChatRequest {
+  messages: ChatMessagePayload[];
+  to?: string | null;
+  preview?: boolean;
+}
+
 export interface RolesResponse {
   roles: string[];
 }

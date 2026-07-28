@@ -21,7 +21,6 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from app.core.logging import get_logger
-from app.config import get_settings
 from app.services.orchestrator import PlanningOrchestrator
 from app.utils.datetime_utils import format_business_date
 from simulator.engine import SimulatorEngine
@@ -71,26 +70,17 @@ class PlanningScheduler:
         """Refresh today's plan and, on Saturdays, publish next week's plans."""
         did_work = self.ensure_day(today)
 
-        # After a fresh daily plan, optionally let the agent autonomously
-        # re-plan around any high-priority orders that are running late.
-        settings = get_settings()
-        if did_work and settings.auto_replan_enabled:
+        # After a fresh daily plan, run the autonomous action bundle (each step
+        # is individually gated by its setting): remediate high-priority late
+        # orders, reorder low materials, auto-commit the best plan, relieve a
+        # bottleneck, and email a daily briefing.
+        if did_work:
             try:
-                self._orch.auto_remediate(
-                    format_business_date(today),
-                    priority_max=settings.auto_replan_priority_max,
-                    notify=settings.auto_notify_email,
+                self._orch.run_autonomy(
+                    format_business_date(today), respect_flags=True
                 )
             except Exception:  # noqa: BLE001 - never let the cadence die
-                logger.exception("Auto-remediate failed for %s.", today)
-
-        # After a fresh daily plan, optionally auto-place purchase orders for
-        # materials that are critically low (below both safety and reorder).
-        if did_work and settings.auto_reorder_enabled:
-            try:
-                self._orch.auto_reorder(format_business_date(today))
-            except Exception:  # noqa: BLE001 - never let the cadence die
-                logger.exception("Auto-reorder failed for %s.", today)
+                logger.exception("Autonomy bundle failed for %s.", today)
 
         if today.weekday() == _SATURDAY:
             next_monday = today + timedelta(days=2)  # Sat + 2 = next Monday
