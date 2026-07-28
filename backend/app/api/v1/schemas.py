@@ -196,6 +196,16 @@ class PlaceOrderRequest(BaseModel):
     )
 
 
+class MaterialReorderRequest(BaseModel):
+    """Request body to place a purchase order for a material and log it."""
+
+    product_id: str = Field(..., min_length=1, description="Material/product to order.")
+    quantity: int | None = Field(
+        default=None, description="Quantity to order; defaults to the shortage."
+    )
+    reason: str | None = Field(default=None, description="Justification for the order.")
+
+
 class EmailActionResponse(BaseModel):
     """Receipt for a dispatched email action."""
 

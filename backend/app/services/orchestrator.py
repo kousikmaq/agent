@@ -10,12 +10,15 @@ scenario -> explanation) and persists every artifact under
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from app.analytics import AnalyticsEngine
+from app.analytics.materials import build_materials_report
 from app.core.logging import get_logger
 from app.core.exceptions import NotFoundError, ValidationError
 from app.domain.enums import RecommendationAction, ScenarioType
@@ -65,6 +68,8 @@ class ResultsStore:
     CONTEXT = "explanation_context.json"
     SUMMARY = "explanation_summary.json"
     MODIFICATIONS = "modifications.json"
+    ORIGINAL_KPIS = "original_plan.json"
+    PURCHASE_ORDERS = "purchase_orders.json"
 
     def __init__(self, outputs_dir: Path) -> None:
         self._outputs_dir = ensure_dir(outputs_dir)
@@ -121,6 +126,44 @@ class ResultsStore:
 
     def load_modifications(self, business_date: str) -> PlanModifications | None:
         return _read(self._dir(business_date) / self.MODIFICATIONS, PlanModifications)
+
+    # --- Original (baseline) plan KPIs ------------------------------------
+    # A write-once snapshot of the day's ORIGINAL plan KPIs, captured the first
+    # time the pipeline runs for the date. It is deliberately never overwritten
+    # by applying scenarios, mitigating risks, removing modifications or even a
+    # later re-run, so the Live Operations page can pin the original plan.
+    def save_original_kpis(
+        self, business_date: str, kpis: dict[str, float]
+    ) -> None:
+        directory = ensure_dir(self._dir(business_date))
+        path = directory / self.ORIGINAL_KPIS
+        if path.exists():
+            return  # write-once: keep the first captured original plan.
+        path.write_text(json.dumps(kpis, indent=2), encoding="utf-8")
+
+    def load_original_kpis(self, business_date: str) -> dict[str, float] | None:
+        path = self._dir(business_date) / self.ORIGINAL_KPIS
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    # --- Purchase orders (material replenishment) -------------------------
+    # Per-day log of purchase orders placed (auto or manual) so the Materials
+    # tab can show what was ordered and when, and so the autonomous reorder can
+    # de-duplicate (place at most one auto order per material per day).
+    def load_purchase_orders(self, business_date: str) -> list[dict]:
+        path = self._dir(business_date) / self.PURCHASE_ORDERS
+        if not path.exists():
+            return []
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def append_purchase_order(self, business_date: str, po: dict) -> None:
+        directory = ensure_dir(self._dir(business_date))
+        orders = self.load_purchase_orders(business_date)
+        orders.append(po)
+        (directory / self.PURCHASE_ORDERS).write_text(
+            json.dumps(orders, indent=2), encoding="utf-8"
+        )
 
     # --- Per-scenario schedules -------------------------------------------
     # Each what-if scenario's full schedule is persisted at morning-run time so
@@ -299,6 +342,10 @@ class PlanningOrchestrator:
         # A fresh full run resets the modification log — this plan is the new
         # baseline that later fixes are compared against.
         base = extract_scenario_kpis(kpis)
+        # Capture the ORIGINAL plan KPIs once for the day (write-once): the Live
+        # Operations page pins these and they must not move when scenarios are
+        # applied, risks are mitigated, or the planner re-runs.
+        self._store.save_original_kpis(business_date, base)
         self._store.save_modifications(
             PlanModifications(
                 business_date=business_date,
@@ -316,13 +363,17 @@ class PlanningOrchestrator:
         policy,
         options: SolverOptions,
         mod_entries: list[PlanModification],
+        replace: bool = False,
     ) -> PlanningResult:
         """Solve a modified state once, persist it, and log the modifications.
 
         Preserves the existing what-if scenario comparison (so the Scenarios
-        tab keeps its three alternatives) instead of re-solving it, and appends
-        ``mod_entries`` to the day's modification log with the before/after
-        KPIs used by the Current Plan tab.
+        tab keeps its three alternatives) instead of re-solving it, and records
+        ``mod_entries`` in the day's modification log with the before/after
+        KPIs used by the Current Plan tab. When ``replace`` is True the log is
+        set to exactly ``mod_entries`` (the caller has already merged with the
+        existing entries — used to keep a single consolidated priority entry);
+        otherwise ``mod_entries`` is appended.
         """
         prev_mods = self._store.load_modifications(business_date)
         prev_kpis = self._store.load_kpis(business_date)
@@ -371,7 +422,9 @@ class PlanningOrchestrator:
                 business_date=business_date,
                 baseline_kpis=baseline,
                 current_kpis=extract_scenario_kpis(kpis),
-                modifications=[*existing_entries, *mod_entries],
+                modifications=list(mod_entries)
+                if replace
+                else [*existing_entries, *mod_entries],
             )
         )
         return result
@@ -473,6 +526,86 @@ class PlanningOrchestrator:
         self._store.save(result, context, summary)
         return result
 
+    def _apply_priority_changes(
+        self,
+        business_date: str,
+        new_levels: dict[str, int],
+        options: SolverOptions | None = None,
+    ) -> PlanningResult:
+        """Apply priority overrides cumulatively as ONE consolidated modification.
+
+        Merges ``new_levels`` (order_id -> priority 1..10) with any priority
+        overrides already in the modification log, rebuilds the plan from the
+        day's ORIGINAL state (re-applying any non-priority fixes plus the merged
+        priority overrides), solves once, and records a SINGLE priority entry.
+        This keeps prioritising several orders — across separate clicks or an
+        autonomous run — a single plan and a single log line, never a growing
+        list of per-order entries.
+        """
+        options = options or self._default_options
+        state = self._loader.load(business_date)
+
+        target_ids = set(new_levels)
+        present = {
+            o.order_id for o in state.production_orders if o.order_id in target_ids
+        }
+        missing = target_ids - present
+        if missing:
+            raise NotFoundError(
+                f"Orders not found for {business_date}: {sorted(missing)}.",
+                details={"order_ids": sorted(missing)},
+            )
+
+        prev = self._store.load_modifications(business_date)
+        existing = list(prev.modifications) if prev is not None else []
+        non_priority = [m for m in existing if m.action != "RAISE_PRIORITY"]
+
+        # Cumulative order -> priority map from prior priority entries, then the
+        # new overrides (later values win).
+        level_map: dict[str, int] = {}
+        for m in existing:
+            if m.action != "RAISE_PRIORITY":
+                continue
+            ids = m.targets.get("order_ids", [])
+            levels = m.targets.get("priorities") or []
+            for i, oid in enumerate(ids):
+                level_map[oid] = int(levels[i]) if i < len(levels) else 10
+        for oid, level in new_levels.items():
+            level_map[oid] = max(1, min(10, int(level)))
+
+        ordered_ids = sorted(level_map)
+        transformed = state.model_copy(deep=True)
+        for m in non_priority:
+            transformed = self._apply_modification(transformed, m)
+        transformed.production_orders = [
+            o.model_copy(update={"priority": level_map[o.order_id]})
+            if o.order_id in level_map
+            else o
+            for o in transformed.production_orders
+        ]
+        policy = self._rules.evaluate(transformed)
+
+        logger.info(
+            "Prioritising %d order(s) on %s (consolidated) and re-solving.",
+            len(ordered_ids),
+            business_date,
+        )
+        entry = PlanModification(
+            label="Prioritised "
+            + f"{len(ordered_ids)} order(s): "
+            + ", ".join(f"{oid}→{level_map[oid]}" for oid in ordered_ids),
+            action="RAISE_PRIORITY",
+            applied_at=datetime.now().isoformat(timespec="seconds"),
+            targets={
+                "order_ids": ordered_ids,
+                "priorities": [str(level_map[oid]) for oid in ordered_ids],
+            },
+        )
+        entries = [*non_priority, entry]
+        return self._finalize_replan(
+            business_date, transformed, policy, options, entries, replace=True
+        )
+
     def apply_order_priority(
         self,
         business_date: str,
@@ -482,54 +615,226 @@ class PlanningOrchestrator:
     ) -> PlanningResult:
         """Raise the priority of the given orders and re-solve the day.
 
-        Loads the day's state, sets the target orders' ``priority`` (clamped to
-        1–10), re-evaluates the business rules on the modified state so the
-        solver's priority weights reflect the change, then re-runs the full
-        deterministic pipeline and persists the result — replacing the
-        committed plan. Used to mitigate delayed-order risks by pushing the
-        affected orders ahead in the schedule.
+        Consolidates with any priority overrides already applied so prioritising
+        several orders — one by one or in bulk — stays a single re-plan and a
+        single modification log entry. Used to mitigate delayed-order risks.
         """
-        options = options or self._default_options
         target = max(1, min(10, priority))
+        return self._apply_priority_changes(
+            business_date, {oid: target for oid in order_ids}, options
+        )
+
+    def auto_remediate(
+        self,
+        business_date: str,
+        priority_max: int = 1,
+        notify: bool = False,
+        options: SolverOptions | None = None,
+    ) -> dict:
+        """Autonomously re-plan when top-priority orders are running late.
+
+        Inspects the committed plan and finds orders whose *display* priority is
+        at most ``priority_max`` (0 = most urgent) that finish late, raises them
+        to top priority and re-plans once — a reversible action recorded in the
+        modification log. Optionally emails a risk + replan summary. Returns a
+        summary and is a safe no-op when nothing needs doing.
+        """
+        from app.analytics.kpis import aggregate_schedule
+
+        schedule = self._store.load_schedule(business_date)
+        kpis = self._store.load_kpis(business_date)
+        if schedule is None or kpis is None:
+            return {
+                "triggered": False,
+                "reason": "no plan for date",
+                "critical_orders": [],
+            }
+
         state = self._loader.load(business_date)
+        aggregates = aggregate_schedule(state, schedule)
+        # Display priority = 10 - raw (0 = most urgent), so display <= max means
+        # raw >= (10 - max).
+        threshold_raw = 10 - max(0, min(9, priority_max))
+        critical = sorted(
+            o.order_id
+            for o in aggregates.order_outcomes
+            if not o.on_time and o.priority >= threshold_raw
+        )
+        before_otd = kpis.on_time_delivery_rate
 
-        target_ids = set(order_ids)
-        present = {
-            o.order_id for o in state.production_orders if o.order_id in target_ids
-        }
-        missing = target_ids - present
-        if missing:
-            raise NotFoundError(
-                f"Orders not found for {business_date}: {sorted(missing)}.",
-                details={"order_ids": sorted(missing)},
+        if not critical:
+            logger.info(
+                "Auto-remediate %s: no top-priority late orders.", business_date
             )
-
-        updated_orders = [
-            o.model_copy(update={"priority": target})
-            if o.order_id in target_ids
-            else o
-            for o in state.production_orders
-        ]
-        modified = state.model_copy(update={"production_orders": updated_orders})
+            return {
+                "triggered": False,
+                "reason": "no high-priority late orders",
+                "critical_orders": [],
+                "before_otd": before_otd,
+            }
 
         logger.info(
-            "Raising priority to %d for orders %s on %s and re-solving.",
-            target,
-            sorted(target_ids),
+            "Auto-remediate %s: %d high-priority late order(s) %s — re-planning.",
+            business_date,
+            len(critical),
+            critical,
+        )
+        result = self.apply_order_priority(
+            business_date,
+            critical,
+            priority=10,
+            options=options,
+        )
+        summary = {
+            "triggered": True,
+            "critical_orders": critical,
+            "before_otd": before_otd,
+            "after_otd": result.kpis.on_time_delivery_rate,
+            "emailed": False,
+        }
+        if notify:
+            summary["emailed"] = self._send_auto_replan_email(business_date, summary)
+        return summary
+
+    @staticmethod
+    def _send_auto_replan_email(business_date: str, summary: dict) -> bool:
+        """Email a risk + replan notification; never raises (returns a flag)."""
+        try:
+            from app.notifications.email_service import EmailService
+
+            def pct(v: object) -> str:
+                return f"{v * 100:.1f}%" if isinstance(v, (int, float)) else "n/a"
+
+            orders = ", ".join(summary.get("critical_orders", []))
+            n = len(summary.get("critical_orders", []))
+            html = (
+                f"<h3>Autonomous re-plan applied — {business_date}</h3>"
+                f"<p>The agent detected <b>{n}</b> high-priority order(s) running "
+                f"late and automatically re-planned to prioritise them.</p>"
+                f"<p><b>On-time delivery:</b> {pct(summary.get('before_otd'))} "
+                f"&rarr; {pct(summary.get('after_otd'))}</p>"
+                f"<p><b>Orders:</b> {orders}</p>"
+                f"<p style='color:#888'>This is a reversible action recorded in the "
+                f"plan modification log — review it on the Current Plan tab.</p>"
+            )
+            EmailService().send_html(
+                subject=f"[PPO] Autonomous re-plan — {business_date}",
+                html_body=html,
+            )
+            logger.info("Auto-remediate %s: notification email sent.", business_date)
+            return True
+        except Exception:  # noqa: BLE001 - notifications must never break planning
+            logger.exception(
+                "Auto-remediate %s: failed to send notification email.", business_date
+            )
+            return False
+
+    # -- Material replenishment (purchase orders) --------------------------
+    @staticmethod
+    def _send_po_email(item: str, quantity: int, reason: str) -> str:
+        """Email a purchase-order request; returns 'sent' or 'error' (never raises)."""
+        try:
+            from app.notifications import EmailService, render_purchase_order_email
+
+            subject, html, text = render_purchase_order_email(
+                item=item,
+                quantity=f"{quantity:,}",
+                supplier=None,
+                order_id=None,
+                needed_by=None,
+                reason=reason or None,
+            )
+            EmailService().send_html(subject, html, text_body=text)
+            return "sent"
+        except Exception:  # noqa: BLE001 - a failed email must not lose the PO record
+            logger.exception("Purchase-order email failed for %s.", item)
+            return "error"
+
+    def reorder_material(
+        self,
+        business_date: str,
+        product_id: str,
+        quantity: int | None = None,
+        reason: str = "",
+        mode: str = "manual",
+    ) -> dict:
+        """Place a purchase order for a material, email it, and log it for the day.
+
+        Returns the recorded purchase order. ``mode`` marks whether it was placed
+        by a human ("manual") or the agent ("auto"). Quantity defaults to the
+        shortage (rounded up) when not given.
+        """
+        report = build_materials_report(self._loader.load(business_date))
+        line = next((ln for ln in report.lines if ln.product_id == product_id), None)
+        if line is None:
+            raise NotFoundError(
+                f"Material '{product_id}' not found for {business_date}.",
+                details={"product_id": product_id},
+            )
+        if quantity is not None and quantity > 0:
+            qty = int(quantity)
+        else:
+            qty = max(1, int(math.ceil(line.shortage or line.reorder_point or 1)))
+
+        item = f"{product_id} ({line.name})" if line.name else product_id
+        email_status = self._send_po_email(item, qty, reason)
+        po = {
+            "product_id": product_id,
+            "name": line.name,
+            "quantity": qty,
+            "placed_at": datetime.now().isoformat(timespec="seconds"),
+            "mode": mode,
+            "below_safety": line.below_safety,
+            "below_reorder": line.below_reorder,
+            "email_status": email_status,
+        }
+        self._store.append_purchase_order(business_date, po)
+        logger.info(
+            "Purchase order (%s) placed for %s x%d on %s.",
+            mode,
+            product_id,
+            qty,
             business_date,
         )
-        policy = self._rules.evaluate(modified)
-        ids = sorted(target_ids)
-        entry = PlanModification(
-            label=f"Raised priority of {len(ids)} order(s) to {target}: "
-            + ", ".join(ids),
-            action="RAISE_PRIORITY",
-            applied_at=datetime.now().isoformat(timespec="seconds"),
-            targets={"order_ids": ids},
+        return po
+
+    def auto_reorder(self, business_date: str) -> dict:
+        """Autonomously place POs for materials below safety or reorder level.
+
+        De-duplicates against orders already placed for the day (so it runs at
+        most once per material per day), and returns a summary. Safe no-op when
+        nothing qualifies.
+        """
+        report = build_materials_report(self._loader.load(business_date))
+        already = {po["product_id"] for po in self._store.load_purchase_orders(business_date)}
+        placed: list[dict] = []
+        skipped: list[str] = []
+        for line in report.lines:
+            if not (line.below_safety or line.below_reorder):
+                continue
+            if line.product_id in already:
+                skipped.append(line.product_id)
+                continue
+            reason = (
+                "Auto-reorder: below safety stock."
+                if line.below_safety
+                else "Auto-reorder: below reorder point."
+            )
+            po = self.reorder_material(
+                business_date,
+                line.product_id,
+                reason=reason,
+                mode="auto",
+            )
+            placed.append(po)
+        logger.info(
+            "Auto-reorder %s: placed %d, skipped %d already ordered.",
+            business_date,
+            len(placed),
+            len(skipped),
         )
-        return self._finalize_replan(
-            business_date, modified, policy, options, [entry]
-        )
+        return {"placed": placed, "skipped_existing": skipped, "count": len(placed)}
+
 
     def apply_order_priorities(
         self,
@@ -539,52 +844,12 @@ class PlanningOrchestrator:
     ) -> PlanningResult:
         """Set explicit per-order priorities and re-solve the day once.
 
-        Unlike :meth:`apply_order_priority` (which raises a set of orders to a
-        single level), this assigns each order its own target priority (clamped
-        1–10), so a planner can raise some orders and lower others in a single
-        re-plan. Re-runs the full deterministic pipeline and persists the
-        result — replacing the committed plan.
+        Assigns each order its own target priority (clamped 1–10), so a planner
+        can raise some orders and lower others in a single re-plan. Consolidates
+        with any existing priority overrides into one cumulative modification
+        entry (never a growing list of per-order entries).
         """
-        options = options or self._default_options
-        state = self._loader.load(business_date)
-
-        target_ids = set(priorities)
-        present = {
-            o.order_id for o in state.production_orders if o.order_id in target_ids
-        }
-        missing = target_ids - present
-        if missing:
-            raise NotFoundError(
-                f"Orders not found for {business_date}: {sorted(missing)}.",
-                details={"order_ids": sorted(missing)},
-            )
-
-        clamped = {oid: max(1, min(10, p)) for oid, p in priorities.items()}
-        updated_orders = [
-            o.model_copy(update={"priority": clamped[o.order_id]})
-            if o.order_id in clamped
-            else o
-            for o in state.production_orders
-        ]
-        modified = state.model_copy(update={"production_orders": updated_orders})
-
-        logger.info(
-            "Setting per-order priorities %s on %s and re-solving.",
-            {k: clamped[k] for k in sorted(clamped)},
-            business_date,
-        )
-        policy = self._rules.evaluate(modified)
-        ids = sorted(clamped)
-        entry = PlanModification(
-            label=f"Changed priority of {len(ids)} order(s): "
-            + ", ".join(f"{oid}→{clamped[oid]}" for oid in ids),
-            action="RAISE_PRIORITY",
-            applied_at=datetime.now().isoformat(timespec="seconds"),
-            targets={"order_ids": ids},
-        )
-        return self._finalize_replan(
-            business_date, modified, policy, options, [entry]
-        )
+        return self._apply_priority_changes(business_date, dict(priorities), options)
 
     def apply_recommendation_action(
         self,
@@ -711,11 +976,16 @@ class PlanningOrchestrator:
     def _apply_modification(self, state, modification: PlanModification):
         """Re-apply one logged modification to ``state`` (for cumulative undo)."""
         if modification.action == "RAISE_PRIORITY":
-            ids = set(modification.targets.get("order_ids", []))
+            ids = list(modification.targets.get("order_ids", []))
             if ids:
+                levels = modification.targets.get("priorities") or []
+                level_map = {
+                    oid: int(levels[i]) if i < len(levels) else 10
+                    for i, oid in enumerate(ids)
+                }
                 state.production_orders = [
-                    o.model_copy(update={"priority": 10})
-                    if o.order_id in ids
+                    o.model_copy(update={"priority": level_map.get(o.order_id, 10)})
+                    if o.order_id in level_map
                     else o
                     for o in state.production_orders
                 ]

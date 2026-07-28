@@ -37,6 +37,38 @@ async def get_scenarios(
     return scenarios
 
 
+@router.get(
+    "/{business_date}/original",
+    summary="Get the fixed original-plan KPIs",
+)
+async def get_original_plan(
+    business_date: str,
+    store: Annotated[ResultsStore, Depends(get_results_store)],
+) -> dict[str, float]:
+    """Return the day's write-once ORIGINAL plan KPIs.
+
+    These are captured the first time the pipeline runs for the date and never
+    change when scenarios are applied, risks mitigated, or the planner re-runs,
+    so the Live Operations page can pin the original plan. Falls back to the
+    persisted baseline row for legacy days that predate the snapshot.
+    """
+    original = store.load_original_kpis(business_date)
+    if original is not None:
+        return original
+    scenarios = store.load_scenarios(business_date)
+    if scenarios is not None:
+        baseline = next(
+            (r for r in scenarios.results if r.is_baseline),
+            None,
+        )
+        if baseline is not None:
+            return dict(baseline.kpis)
+    raise NotFoundError(
+        f"No original plan found for {business_date}; run the pipeline first.",
+        details={"business_date": business_date},
+    )
+
+
 @router.post(
     "/{business_date}/apply",
     response_model=ScheduleResult,

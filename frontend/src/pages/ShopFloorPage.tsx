@@ -4,6 +4,7 @@ import type { RiskReport, ShopFloorStatus } from "../types/api";
 import { ShopFloorBoard } from "../components/ShopFloorBoard";
 import { ReportEmailButton } from "../components/EmailButton";
 import { PanelSkeleton } from "../components/Skeleton";
+import { PlanKpiCards } from "../components/PlanKpiCards";
 import { datesUpToToday } from "../utils/format";
 
 /** Shop-floor monitoring page: live status of machines, workers, orders, materials. */
@@ -16,6 +17,10 @@ export function ShopFloorPage({
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [status, setStatus] = useState<ShopFloorStatus | null>(null);
   const [risks, setRisks] = useState<RiskReport | null>(null);
+  // The original (baseline / current-plan) KPIs for the day, shown as cards.
+  const [baselineKpis, setBaselineKpis] = useState<Record<string, number> | null>(
+    null
+  );
   const [message, setMessage] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
@@ -46,6 +51,13 @@ export function ShopFloorPage({
       setRisks(await api.getRisks(date));
     } catch {
       setRisks(null);
+    }
+    // The fixed ORIGINAL plan KPIs — captured write-once by the day's first
+    // pipeline run and never moved by scenarios, risk mitigations or re-runs.
+    try {
+      setBaselineKpis(await api.getOriginalPlanKpis(date));
+    } catch {
+      setBaselineKpis(null);
     }
   }, []);
 
@@ -80,6 +92,10 @@ export function ShopFloorPage({
       </header>
 
       {message && <div className="status-bar">{message}</div>}
+
+      {baselineKpis && (
+        <PlanKpiCards kpis={baselineKpis} title="Original plan (baseline)" />
+      )}
 
       <section className="tab-panel">
         {selectedDate && status && (

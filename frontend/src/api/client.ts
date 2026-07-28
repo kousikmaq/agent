@@ -16,12 +16,14 @@ import type {
   KpiSet,
   OrchestrationResult,
   PlaceOrderRequest,
+  PurchaseOrder,
   PlanModifications,
   MaterialsReport,
   RecommendationSet,
   RiskReport,
   RolesResponse,
   ScenarioComparison,
+  AutoRemediateResult,
   ScheduleResult,
   ShopFloorStatus,
   WeeklyPlanReport,
@@ -138,6 +140,15 @@ export const api = {
     request<RecommendationSet>(`/recommendations/${date}`),
   getScenarios: (date: string) =>
     request<ScenarioComparison>(`/scenarios/${date}`),
+  /** The day's fixed original-plan KPIs (write-once; never moves). */
+  getOriginalPlanKpis: (date: string) =>
+    request<Record<string, number>>(`/scenarios/${date}/original`),
+  /** Autonomously re-plan around high-priority late orders. */
+  autoRemediate: (date: string, priority_max?: number, notify?: boolean) =>
+    request<AutoRemediateResult>(`/schedule/auto-remediate`, {
+      method: "POST",
+      body: JSON.stringify({ business_date: date, priority_max, notify }),
+    }),
 
   applyScenario: (
     date: string,
@@ -158,6 +169,20 @@ export const api = {
 
   getMaterials: (date: string) =>
     request<MaterialsReport>(`/materials/${date}`),
+  /** Purchase orders placed (auto or manual) for the day. */
+  getPurchaseOrders: (date: string) =>
+    request<PurchaseOrder[]>(`/materials/${date}/purchase-orders`),
+  /** Place a purchase order for one material (logged + emailed). */
+  reorderMaterial: (
+    date: string,
+    product_id: string,
+    quantity?: number,
+    reason?: string
+  ) =>
+    request<PurchaseOrder>(`/materials/${date}/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ product_id, quantity, reason }),
+    }),
 
   getWeeklyPlan: (date: string, asOf?: string) =>
     request<WeeklyPlanReport>(

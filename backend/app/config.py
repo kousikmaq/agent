@@ -80,6 +80,21 @@ class Settings(BaseSettings):
     # already planned are skipped, so it never recomputes an existing plan.
     enable_scheduler: bool = True
 
+    # --- Autonomous remediation ---
+    # When True, after a fresh daily plan the agent auto-detects top-priority
+    # orders that are late and re-plans to prioritise them (a reversible, logged
+    # action). ``auto_replan_priority_max`` is the highest display priority
+    # (0 = most urgent) that triggers it. ``auto_notify_email`` emails a
+    # risk + replan summary to ``alert_email_to`` when an auto-action runs.
+    auto_replan_enabled: bool = False
+    auto_replan_priority_max: int = 1
+    auto_notify_email: bool = False
+
+    # When True, after a fresh daily plan the agent auto-places purchase orders
+    # for materials below BOTH safety stock and reorder point (once per day per
+    # material, de-duplicated against orders already placed that day).
+    auto_reorder_enabled: bool = False
+
     # --- Azure OpenAI (used by the explanation/chat phase; optional here) ---
     azure_openai_endpoint: str | None = None
     azure_openai_deployment: str | None = None

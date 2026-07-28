@@ -54,7 +54,7 @@ function UserMenu() {
 
 /** Authenticated application shell (nav + pages). */
 function Workspace() {
-  const [page, setPage] = useState<Page>("planning");
+  const [page, setPage] = useState<Page>("shopfloor");
   // A tab to open on the planning page (e.g. from a Live Ops "view materials").
   const [planningTab, setPlanningTab] = useState<string | null>(null);
 
@@ -64,16 +64,16 @@ function Workspace() {
         <span className="brand">PPO Agent</span>
         <div className="top-nav-links">
           <button
-            className={page === "planning" ? "nav-link active" : "nav-link"}
-            onClick={() => setPage("planning")}
-          >
-            Planning
-          </button>
-          <button
             className={page === "shopfloor" ? "nav-link active" : "nav-link"}
             onClick={() => setPage("shopfloor")}
           >
             Live Operations
+          </button>
+          <button
+            className={page === "planning" ? "nav-link active" : "nav-link"}
+            onClick={() => setPage("planning")}
+          >
+            Planning
           </button>
         </div>
         <UserMenu />

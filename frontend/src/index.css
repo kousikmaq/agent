@@ -246,6 +246,29 @@ button.primary:hover:not(:disabled) {
 .kpi-section {
   margin-bottom: 20px;
 }
+.plan-kpi-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.mat-po {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mat-po-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+.badge.badge-ordered {
+  background: rgba(56, 132, 255, 0.16);
+  color: #7fb0ff;
+  border: 1px solid rgba(56, 132, 255, 0.4);
+}
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

@@ -91,6 +91,28 @@ export interface ScenarioComparison {
   kpi_deltas: Record<string, Record<string, number>>;
 }
 
+/** Result of an autonomous remediation run. */
+export interface AutoRemediateResult {
+  triggered: boolean;
+  reason?: string;
+  critical_orders: string[];
+  before_otd?: number | null;
+  after_otd?: number | null;
+  emailed?: boolean;
+}
+
+/** A purchase order placed (auto or manual) for a material on a day. */
+export interface PurchaseOrder {
+  product_id: string;
+  name?: string | null;
+  quantity: number;
+  placed_at: string;
+  mode: "auto" | "manual";
+  below_safety: boolean;
+  below_reorder: boolean;
+  email_status: string;
+}
+
 export interface PlanModification {
   label: string;
   action: string;

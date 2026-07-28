@@ -1,11 +1,14 @@
-import { useMemo, useState } from "react";
-import type { MaterialLine, MaterialsReport } from "../../types/api";
+import { useEffect, useMemo, useState } from "react";
+import type { MaterialLine, MaterialsReport, PurchaseOrder } from "../../types/api";
 import { api, ApiError } from "../../api/client";
 import { ActionButton } from "../ActionButton";
 import { toast } from "../Toast";
+import { fmtDateTime } from "../../utils/format";
 
 interface Props {
   report: MaterialsReport;
+  /** Business date, used to load/place this day's purchase orders. */
+  date: string;
 }
 
 type SortKey =
@@ -40,11 +43,30 @@ const fmt = (v: number) =>
  * replenished directly with a place-order email — the same action offered for
  * material-shortage risks, kept consistent per selected material.
  */
-export function MaterialsPanel({ report }: Props) {
+export function MaterialsPanel({ report, date }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
     key: "status",
     dir: "desc",
   });
+  // Latest purchase order per material for the day (product_id -> PO).
+  const [pos, setPos] = useState<Record<string, PurchaseOrder>>({});
+  useEffect(() => {
+    let active = true;
+    api
+      .getPurchaseOrders(date)
+      .then((list) => {
+        if (!active) return;
+        const map: Record<string, PurchaseOrder> = {};
+        for (const po of list) map[po.product_id] = po; // appended in order: last wins
+        setPos(map);
+      })
+      .catch(() => {
+        if (active) setPos({});
+      });
+    return () => {
+      active = false;
+    };
+  }, [date]);
 
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
@@ -96,13 +118,11 @@ export function MaterialsPanel({ report }: Props) {
       ? `${m.product_id} is below its reorder point (net ${fmt(m.net_available)}, ` +
         `reorder ${fmt(m.reorder_point)}).`
       : `Replenishment for ${m.product_id}.`;
+    const qty = m.shortage > 0 ? Math.ceil(m.shortage) : undefined;
     try {
-      const res = await api.placeOrder({
-        item: m.name ? `${m.product_id} (${m.name})` : m.product_id,
-        quantity: m.shortage > 0 ? String(Math.ceil(m.shortage)) : undefined,
-        reason,
-      });
-      toast(`Purchase order for ${m.product_id} emailed to ${res.recipient}`, "success");
+      const po = await api.reorderMaterial(date, m.product_id, qty, reason);
+      setPos((prev) => ({ ...prev, [po.product_id]: po }));
+      toast(`Purchase order for ${m.product_id} placed (${po.email_status}).`, "success");
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Failed to place order", "error");
       throw e;
@@ -113,12 +133,19 @@ export function MaterialsPanel({ report }: Props) {
     return <p className="empty">No materials tracked for this day.</p>;
   }
 
+  // Mutually-exclusive counts that match the Status column: a material below
+  // safety is shown as "below safety" (not also counted under "below reorder").
+  const belowSafetyCount = report.lines.filter((l) => l.below_safety).length;
+  const belowReorderOnly = report.lines.filter(
+    (l) => l.below_reorder && !l.below_safety
+  ).length;
+
   return (
     <div className="panel-list">
       <div className="severity-summary">
-        <span className="badge feas-no">Below safety: {report.below_safety}</span>
+        <span className="badge feas-no">Below safety: {belowSafetyCount}</span>
         <span className="badge feas-approve">
-          Below reorder: {report.below_reorder}
+          Below reorder: {belowReorderOnly}
         </span>
         <span className="muted">Materials tracked: {report.total}</span>
       </div>
@@ -176,13 +203,39 @@ export function MaterialsPanel({ report }: Props) {
                   <span className={`badge ${badge.cls}`}>{badge.label}</span>
                 </td>
                 <td>
-                  <ActionButton
-                    icon="✉"
-                    label="Place order"
-                    pendingLabel="Ordering…"
-                    successLabel="Ordered"
-                    onAction={() => placeOrder(m)}
-                  />
+                  {pos[m.product_id] ? (
+                    <div className="mat-po">
+                      <span
+                        className="badge badge-ordered"
+                        title={`${
+                          pos[m.product_id].mode === "auto" ? "Auto" : "Manually"
+                        }-placed purchase order`}
+                      >
+                        ✅ Ordered {fmt(pos[m.product_id].quantity)}
+                        {pos[m.product_id].mode === "auto" ? " · auto" : " · manual"}
+                      </span>
+                      <span className="mat-po-time">
+                        at {fmtDateTime(pos[m.product_id].placed_at)}
+                      </span>
+                      <ActionButton
+                        icon="✉"
+                        label="Order again"
+                        pendingLabel="Ordering…"
+                        successLabel="Ordered"
+                        onAction={() => placeOrder(m)}
+                      />
+                    </div>
+                  ) : m.below_safety || m.below_reorder ? (
+                    <ActionButton
+                      icon="✉"
+                      label="Place order"
+                      pendingLabel="Ordering…"
+                      successLabel="Ordered"
+                      onAction={() => placeOrder(m)}
+                    />
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
                 </td>
               </tr>
             );
@@ -190,8 +243,10 @@ export function MaterialsPanel({ report }: Props) {
         </tbody>
       </table>
       <p className="panel-note">
-        Place order emails a purchase-order request for the selected material —
-        the same action available for material-shortage risks.
+        Place order emails a purchase-order request and records it for the day.
+        Materials below safety stock or their reorder point can be ordered
+        automatically once per day; each row shows what was ordered and when,
+        and you can Order again if needed.
       </p>
     </div>
   );

@@ -144,6 +144,8 @@ export function DashboardPage({
   const [removingMod, setRemovingMod] = useState<string | null>(null);
   // Whether an Orders-tab priority re-plan is running.
   const [replanningOrders, setReplanningOrders] = useState(false);
+  // Whether an autonomous remediation run is in progress.
+  const [autoRemediating, setAutoRemediating] = useState(false);
   // The scenario currently selected on the Scenarios tab (for its email).
   const [selectedScenarioType, setSelectedScenarioType] = useState<string | null>(
     null
@@ -330,6 +332,41 @@ export function DashboardPage({
       setStatus("Failed to re-plan with the new priorities.");
     } finally {
       setReplanningOrders(false);
+    }
+  }
+
+  async function onAutoRemediate() {
+    if (!selectedDate || autoRemediating) return;
+    const ok = window.confirm(
+      `Let the agent auto-remediate ${selectedDate}?\n\n` +
+        "It detects high-priority (0–1) orders running late and re-plans to " +
+        "prioritise them. This is reversible and recorded in the Current Plan log."
+    );
+    if (!ok) return;
+    setAutoRemediating(true);
+    setStatus(`Agent is checking ${selectedDate} for high-priority late orders…`);
+    try {
+      const r = await api.autoRemediate(selectedDate);
+      if (r.triggered) {
+        await loadResults(selectedDate);
+        const otd =
+          r.before_otd != null && r.after_otd != null
+            ? ` OTD ${(r.before_otd * 100).toFixed(1)}% → ${(r.after_otd * 100).toFixed(1)}%.`
+            : "";
+        setStatus(
+          `Auto-remediated ${selectedDate}: prioritised ${r.critical_orders.length} ` +
+            `high-priority late order(s)${r.emailed ? " (email sent)" : ""}.${otd}`
+        );
+        setTab("current");
+      } else {
+        setStatus(
+          `No autonomous action needed for ${selectedDate} — no high-priority orders are late.`
+        );
+      }
+    } catch {
+      setStatus("Autonomous remediation failed.");
+    } finally {
+      setAutoRemediating(false);
     }
   }
 
@@ -595,6 +632,7 @@ export function DashboardPage({
   const mutating =
     busy ||
     replanningOrders ||
+    autoRemediating ||
     applyingScenario !== null ||
     mitigatingRisk !== null ||
     reapplyingMod !== null ||
@@ -709,6 +747,20 @@ export function DashboardPage({
                     Know more / Ask AI
                   </button>
                 )}
+                {tab === "risks" && (
+                  <button
+                    type="button"
+                    className="action-btn ab-ghost"
+                    onClick={onAutoRemediate}
+                    disabled={autoRemediating}
+                    title="Let the agent auto-detect high-priority (0–1) late orders and re-plan to prioritise them"
+                  >
+                    <span className="ab-icon" aria-hidden>
+                      🤖
+                    </span>
+                    {autoRemediating ? "Auto-remediating…" : "Auto-remediate high-priority"}
+                  </button>
+                )}
                 <ReportEmailButton
                   date={selectedDate}
                   reportType={REPORT_FOR_TAB[tab]}
@@ -785,7 +837,7 @@ export function DashboardPage({
               (materialsLoading ? (
                 <PanelSkeleton />
               ) : materials ? (
-                <MaterialsPanel report={materials} />
+                <MaterialsPanel report={materials} date={selectedDate} />
               ) : (
                 <p className="empty">No materials data for this day.</p>
               ))}
