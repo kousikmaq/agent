@@ -11,10 +11,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.analytics import ShopFloorStatus, build_shopfloor_status
-from app.api.v1.deps import get_data_source, get_results_store
+from app.api.v1.deps import get_data_source, get_orchestrator, get_results_store
+from app.api.v1.schemas import AutonomyCapability
 from app.core.exceptions import DataIngestionError, NotFoundError
 from app.ingestion import CsvDataSource
-from app.services import ResultsStore
+from app.services import PlanningOrchestrator, ResultsStore
 
 router = APIRouter(prefix="/shopfloor", tags=["shopfloor"])
 
@@ -43,3 +44,23 @@ async def get_shopfloor(
         ) from exc
     risks = store.load_risks(business_date)
     return build_shopfloor_status(state, risks)
+
+
+@router.get(
+    "/{business_date}/activity",
+    response_model=list[AutonomyCapability],
+    summary="Get the agent's autonomous capability status",
+)
+async def get_activity(
+    business_date: str,
+    orchestrator: Annotated[PlanningOrchestrator, Depends(get_orchestrator)],
+) -> list[AutonomyCapability]:
+    """Return every autonomous capability with its status for the day.
+
+    Capabilities that acted carry their recorded detail; the rest are marked
+    standing by with the condition that would trigger them.
+    """
+    return [
+        AutonomyCapability(**cap)
+        for cap in orchestrator.autonomy_status(business_date)
+    ]

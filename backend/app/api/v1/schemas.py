@@ -273,3 +273,40 @@ class RolesResponse(BaseModel):
 
     roles: list[str]
 
+
+class AutonomyCapability(BaseModel):
+    """One autonomous capability with its status for the Live Ops feed.
+
+    Returned for every capability, whether or not it fired on the most recent
+    cycle, so the UI can show both completed actions and what the agent is
+    standing by to do (with the condition that would trigger it).
+    """
+
+    kind: str = Field(..., description="Capability category.")
+    title: str = Field(..., description="Short headline of the capability.")
+    done: bool = Field(..., description="Whether it acted on the most recent cycle.")
+    condition: str = Field(
+        ..., description="The condition under which this capability runs."
+    )
+    enabled: bool = Field(
+        ..., description="Whether it runs automatically on the daily cadence."
+    )
+    detail: str | None = Field(
+        default=None, description="What it did (present only when done)."
+    )
+    impact: str | None = Field(
+        default=None, description="Optional before/after impact summary."
+    )
+    trigger: str | None = Field(
+        default=None, description="Optional reason the action fired."
+    )
+    reversible: bool = Field(
+        default=False, description="Whether the action can be reverted."
+    )
+    emailed: bool = Field(
+        default=False, description="Whether it also sent a notification email."
+    )
+    at: str | None = Field(
+        default=None, description="ISO timestamp when the action was recorded."
+    )
+

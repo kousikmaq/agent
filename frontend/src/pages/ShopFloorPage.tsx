@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { RiskReport, ShopFloorStatus } from "../types/api";
+import type { AutonomyCapability, RiskReport, ShopFloorStatus } from "../types/api";
 import { ShopFloorBoard } from "../components/ShopFloorBoard";
+import { AgentActivityFeed } from "../components/AgentActivityFeed";
 import { ReportEmailButton } from "../components/EmailButton";
 import { PanelSkeleton } from "../components/Skeleton";
 import { PlanKpiCards } from "../components/PlanKpiCards";
@@ -17,6 +18,7 @@ export function ShopFloorPage({
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [status, setStatus] = useState<ShopFloorStatus | null>(null);
   const [risks, setRisks] = useState<RiskReport | null>(null);
+  const [activity, setActivity] = useState<AutonomyCapability[]>([]);
   // The original (baseline / current-plan) KPIs for the day, shown as cards.
   const [baselineKpis, setBaselineKpis] = useState<Record<string, number> | null>(
     null
@@ -58,6 +60,12 @@ export function ShopFloorPage({
       setBaselineKpis(await api.getOriginalPlanKpis(date));
     } catch {
       setBaselineKpis(null);
+    }
+    // The autonomous actions the agent took on its most recent cycle.
+    try {
+      setActivity(await api.getAgentActivity(date));
+    } catch {
+      setActivity([]);
     }
   }, []);
 
@@ -115,6 +123,10 @@ export function ShopFloorPage({
           <p className="empty">Select a day to see shop-floor status.</p>
         )}
       </section>
+
+      {selectedDate && status && (
+        <AgentActivityFeed items={activity} date={selectedDate} />
+      )}
     </div>
   );
 }

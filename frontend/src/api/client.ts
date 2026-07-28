@@ -6,6 +6,7 @@
 import type {
   ChatResponse,
   DatesResponse,
+  AutonomyCapability,
   DeliveryDriftReport,
   DeliveryReport,
   EmailReportRequest,
@@ -176,6 +177,10 @@ export const api = {
     request<DeliveryDriftReport>(`/deliveries/${date}/drift?horizon_days=${horizon}`),
   getShopFloor: (date: string) =>
     request<ShopFloorStatus>(`/shopfloor/${date}`),
+
+  /** Every autonomous capability with its status (done or standing by). */
+  getAgentActivity: (date: string) =>
+    request<AutonomyCapability[]>(`/shopfloor/${date}/activity`),
 
   getMaterials: (date: string) =>
     request<MaterialsReport>(`/materials/${date}`),

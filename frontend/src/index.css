@@ -2644,4 +2644,183 @@ th.sortable:hover {
   white-space: nowrap;
 }
 
+/* --- Agent activity feed (Live Operations) --- */
+.agent-activity {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.agent-activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.agent-activity-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.agent-activity-spark {
+  font-size: 22px;
+  line-height: 1;
+  filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.35));
+}
+.agent-activity-title h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.agent-activity-sub {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.agent-activity-badge {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+.agent-activity-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.agent-activity-empty-icon {
+  font-size: 22px;
+}
+.agent-timeline {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  position: relative;
+}
+.agent-timeline::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--border);
+}
+.agent-timeline-item {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  padding: 0 0 16px 0;
+}
+.agent-timeline-item:last-child {
+  padding-bottom: 0;
+}
+.agent-timeline-item.standby {
+  opacity: 0.72;
+}
+.agent-timeline-item.standby .agent-timeline-dot {
+  border: 1px dashed currentColor;
+}
+.agent-timeline-dot {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--surface);
+}
+.agent-timeline-body {
+  flex: 1;
+  min-width: 0;
+  padding-top: 1px;
+}
+.agent-timeline-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agent-timeline-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.agent-timeline-time {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.agent-timeline-detail {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.45;
+}
+.agent-timeline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 5px;
+  font-size: 12px;
+}
+.agent-timeline-impact {
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+}
+.agent-timeline-trigger {
+  color: var(--muted);
+}
+.agent-timeline-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.agent-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.agent-chip-revert {
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.4);
+}
+.agent-chip-mail {
+  color: #0891b2;
+  border-color: rgba(8, 145, 178, 0.4);
+}
+.agent-chip-done {
+  color: #059669;
+  border-color: rgba(5, 150, 105, 0.4);
+  background: rgba(5, 150, 105, 0.08);
+}
+.agent-chip-standby {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+
 

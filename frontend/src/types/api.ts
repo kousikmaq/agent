@@ -186,6 +186,30 @@ export interface RolesResponse {
   roles: string[];
 }
 
+export type AutonomyKind =
+  | "reorder"
+  | "conflict"
+  | "commit"
+  | "overtime"
+  | "remediate"
+  | "rebalance"
+  | "escalation"
+  | "briefing";
+
+export interface AutonomyCapability {
+  kind: AutonomyKind;
+  title: string;
+  done: boolean;
+  condition: string;
+  enabled: boolean;
+  detail?: string | null;
+  impact?: string | null;
+  trigger?: string | null;
+  reversible: boolean;
+  emailed: boolean;
+  at?: string | null;
+}
+
 export type DeliveryStatus = "ON_TRACK" | "AT_RISK" | "LATE" | "UNSCHEDULED";
 
 export interface DeliveryLine {

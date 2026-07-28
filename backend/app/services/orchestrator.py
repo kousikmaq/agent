@@ -77,6 +77,7 @@ class ResultsStore:
     MODIFICATIONS = "modifications.json"
     ORIGINAL_KPIS = "original_plan.json"
     PURCHASE_ORDERS = "purchase_orders.json"
+    AGENT_ACTIVITY = "agent_activity.json"
 
     def __init__(self, outputs_dir: Path) -> None:
         self._outputs_dir = ensure_dir(outputs_dir)
@@ -170,6 +171,22 @@ class ResultsStore:
         orders.append(po)
         (directory / self.PURCHASE_ORDERS).write_text(
             json.dumps(orders, indent=2), encoding="utf-8"
+        )
+
+    # --- Agent activity (autonomous actions) ------------------------------
+    # Per-day feed of the autonomous actions the agent took on its most recent
+    # cycle, so the Live Operations page can show the user exactly what happened
+    # without them having to be watching. Rewritten each cycle that does work.
+    def load_activity(self, business_date: str) -> list[dict]:
+        path = self._dir(business_date) / self.AGENT_ACTIVITY
+        if not path.exists():
+            return []
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def save_activity(self, business_date: str, events: list[dict]) -> None:
+        directory = ensure_dir(self._dir(business_date))
+        (directory / self.AGENT_ACTIVITY).write_text(
+            json.dumps(events, indent=2), encoding="utf-8"
         )
 
     # --- Per-scenario schedules -------------------------------------------
@@ -1243,7 +1260,243 @@ class PlanningOrchestrator:
 
         if not respect_flags or s.auto_briefing_enabled:
             summary["briefing_sent"] = self.send_morning_briefing(business_date, summary)
+
+        self._record_autonomy_activity(business_date, summary)
         return summary
+
+    def _record_autonomy_activity(self, business_date: str, summary: dict) -> None:
+        """Persist a per-day feed of the autonomous actions actually taken.
+
+        Only real actions are recorded (a step that evaluated but did nothing is
+        skipped), so the Live Operations timeline reflects exactly what happened.
+        The log is rewritten only when at least one action occurred, so a no-op
+        cycle never erases an earlier cycle's history for the day.
+        """
+        now = datetime.now().isoformat(timespec="seconds")
+        events: list[dict] = []
+
+        def add(
+            kind: str,
+            title: str,
+            detail: str,
+            *,
+            reversible: bool = False,
+            emailed: bool = False,
+            impact: str | None = None,
+            trigger: str | None = None,
+        ) -> None:
+            events.append(
+                {
+                    "at": now,
+                    "kind": kind,
+                    "title": title,
+                    "detail": detail,
+                    "reversible": reversible,
+                    "emailed": emailed,
+                    "impact": impact,
+                    "trigger": trigger,
+                }
+            )
+
+        reo = summary.get("reorder") or {}
+        if reo.get("count"):
+            placed = reo.get("placed") or []
+            listing = f": {', '.join(placed[:6])}" if placed else ""
+            add(
+                "reorder",
+                "Reordered low materials",
+                f"Placed {reo['count']} purchase order(s){listing}",
+                emailed=True,
+                trigger="Materials below safety / reorder point",
+            )
+
+        rc = summary.get("conflicts") or {}
+        if rc.get("resolved"):
+            add(
+                "conflict",
+                "Resolved scheduling conflicts",
+                f"Auto-resolved {rc.get('count')} conflict(s) and re-planned the day",
+                reversible=True,
+                emailed=bool(rc.get("emailed")),
+                trigger="Worker / maintenance conflicts detected",
+            )
+
+        cb = summary.get("commit_best") or {}
+        if cb.get("committed"):
+            gain = cb.get("otd_gain")
+            cost = cb.get("cost_delta")
+            impact = None
+            if isinstance(gain, (int, float)):
+                impact = f"OTD {'+' if gain >= 0 else ''}{gain * 100:.1f}%"
+                if isinstance(cost, (int, float)):
+                    impact += f", cost {cost:+,.0f}"
+            add(
+                "commit",
+                "Committed the best plan",
+                f"Switched to the '{cb.get('best')}' plan",
+                reversible=True,
+                impact=impact,
+                trigger="A what-if plan cleared the improvement thresholds",
+            )
+
+        ot = summary.get("overtime") or {}
+        if ot.get("applied"):
+            otd = ot.get("otd_after")
+            impact = f"OTD → {otd * 100:.1f}%" if isinstance(otd, (int, float)) else None
+            add(
+                "overtime",
+                "Enabled overtime",
+                f"Delivery risk was high ({ot.get('at_risk')} at-risk order(s))",
+                reversible=True,
+                impact=impact,
+                trigger="At-risk orders reached the overtime threshold",
+            )
+
+        rem = summary.get("remediate") or {}
+        if rem.get("triggered"):
+            orders = rem.get("critical_orders") or []
+            listing = f": {', '.join(orders[:6])}" if orders else ""
+            before = rem.get("before_otd")
+            after = rem.get("after_otd")
+            impact = None
+            if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                impact = f"OTD {before * 100:.1f}% → {after * 100:.1f}%"
+            add(
+                "remediate",
+                "Prioritised late orders",
+                f"Prioritised {len(orders)} high-priority late order(s){listing}",
+                reversible=True,
+                emailed=bool(rem.get("emailed")),
+                impact=impact,
+                trigger="High-priority orders were running late",
+            )
+
+        rb = summary.get("rebalance") or {}
+        if rb.get("rebalanced"):
+            mb = rb.get("makespan_before")
+            ma = rb.get("makespan_after")
+            impact = None
+            if isinstance(mb, (int, float)) and isinstance(ma, (int, float)):
+                impact = f"Makespan {mb / 1440:.1f}d → {ma / 1440:.1f}d"
+            add(
+                "rebalance",
+                "Re-balanced a bottleneck",
+                "Applied the Alternate-Machines plan to relieve a hot machine",
+                reversible=True,
+                impact=impact,
+                trigger="A machine hit a utilization bottleneck",
+            )
+
+        esc = summary.get("escalation") or {}
+        if esc.get("escalated"):
+            add(
+                "escalation",
+                "Escalated severely late orders",
+                f"Escalated {esc.get('count')} order(s) by email to the supervisor",
+                emailed=bool(esc.get("emailed")),
+                trigger="Orders projected late beyond the escalation threshold",
+            )
+
+        if summary.get("briefing_sent"):
+            add(
+                "briefing",
+                "Sent the daily briefing",
+                "Emailed a plan summary with KPIs, risks and the actions taken",
+                emailed=True,
+            )
+
+        if events:
+            self._store.save_activity(business_date, events)
+
+    def autonomy_status(self, business_date: str) -> list[dict]:
+        """The full catalogue of autonomous capabilities with per-item status.
+
+        Every capability is returned, whether or not it fired on the most recent
+        cycle: the ones that acted carry their recorded detail, and the rest are
+        marked standing by with the (settings-derived, never hard-coded)
+        condition that would trigger them. Powers the Live Operations feed so the
+        user sees both what the agent did and what it is watching for.
+        """
+        s = get_settings()
+        done = {
+            str(e.get("kind")): e for e in self._store.load_activity(business_date)
+        }
+
+        catalogue: list[tuple[str, str, str, bool]] = [
+            (
+                "reorder",
+                "Reorder low materials",
+                "Runs when materials fall below their safety or reorder point.",
+                s.auto_reorder_enabled,
+            ),
+            (
+                "conflict",
+                "Resolve scheduling conflicts",
+                "Runs when worker or maintenance conflicts are detected.",
+                s.auto_resolve_conflicts_enabled,
+            ),
+            (
+                "commit",
+                "Commit the best plan",
+                f"Runs when a what-if plan lifts on-time delivery by at least "
+                f"{s.auto_commit_min_otd_gain * 100:.0f}% within a "
+                f"{s.auto_commit_max_cost_increase:,.0f} cost limit.",
+                s.auto_commit_best_enabled,
+            ),
+            (
+                "overtime",
+                "Enable overtime",
+                f"Runs when at-risk orders reach {s.overtime_risk_threshold}.",
+                s.auto_overtime_on_risk_enabled,
+            ),
+            (
+                "remediate",
+                "Prioritise late orders",
+                "Runs when high-priority orders are running late.",
+                s.auto_replan_enabled,
+            ),
+            (
+                "rebalance",
+                "Re-balance a bottleneck",
+                f"Runs when a machine tops "
+                f"{s.auto_rebalance_util_threshold * 100:.0f}% utilization while "
+                f"another sits under {s.auto_rebalance_alt_util_max * 100:.0f}%.",
+                s.auto_rebalance_enabled,
+            ),
+            (
+                "escalation",
+                "Escalate severely late orders",
+                f"Runs when orders are projected at least "
+                f"{s.escalation_lateness_days} day(s) late.",
+                s.auto_escalation_enabled,
+            ),
+            (
+                "briefing",
+                "Send the daily briefing",
+                "Runs after each daily cycle to summarise the plan and actions.",
+                s.auto_briefing_enabled,
+            ),
+        ]
+
+        status: list[dict] = []
+        for kind, title, condition, enabled in catalogue:
+            event = done.get(kind)
+            status.append(
+                {
+                    "kind": kind,
+                    "title": title,
+                    "done": event is not None,
+                    "condition": condition,
+                    "enabled": bool(enabled),
+                    "detail": event.get("detail") if event else None,
+                    "impact": event.get("impact") if event else None,
+                    "trigger": event.get("trigger") if event else None,
+                    "reversible": bool(event.get("reversible")) if event else False,
+                    "emailed": bool(event.get("emailed")) if event else False,
+                    "at": event.get("at") if event else None,
+                }
+            )
+        return status
 
     def apply_order_priorities(
         self,
