@@ -149,6 +149,9 @@ decision a clear reason.
   before committing.
 - **Every decision has a reason.** Modifications are logged, and the assistant can explain any part of
   the plan in plain words.
+- **The work is split into clear steps.** Behind the scenes the plan is built by a chain of small,
+  focused steps (load data, check it, schedule, measure, find risks, recommend fixes, compare
+  scenarios, explain). Each step does one job, which keeps the system easy to trust, test, and extend.
 
 ---
 
@@ -209,3 +212,6 @@ extended toward live ERP or MES data instead of the built in simulator.
   hardened security boundary, so any sensitive deployment needs proper server side access control.
 - Emails and purchase orders run in a simulated or local outbox mode unless real mail settings are
   configured.
+- The predictive signals (delay risk, downtime risk, demand forecast, and so on) come from models
+  trained on historical data. They are supporting insights only and never change the schedule, and if
+  they have not been trained the rest of the product still works.

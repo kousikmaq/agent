@@ -92,7 +92,7 @@ In words, the day usually runs like this.
 
 ---
 
-## 5. The planning pipeline step by step
+## 5. The planning pipeline and agent workflow
 
 When a planner runs the plan for a date, the following happens in order.
 
@@ -112,6 +112,30 @@ When a planner runs the plan for a date, the following happens in order.
 9. **Build explanation context.** A curated set of facts is prepared so the assistant can answer
    questions without ever touching the solver.
 10. **Persist.** Everything is saved per date so it can be reloaded and reused without recomputing.
+
+### How the pipeline is built: the agent workflow
+
+Inside the backend this pipeline is organised as a set of small, single purpose agents, built on the
+Microsoft Agent Framework. Each stage above is owned by one agent, and an orchestrator runs them in a
+fixed order, passing a shared context from one agent to the next.
+
+The eight agents are:
+
+- **Data agent.** Loads the factory snapshot for the date.
+- **Validation agent.** Checks the data is complete and consistent.
+- **Planning agent.** Calls the OR-Tools CP-SAT solver and produces the schedule.
+- **Analytics agent.** Computes the KPIs and cost breakdown.
+- **Risk agent.** Runs the risk detectors and grades each risk.
+- **Recommendation agent.** Turns risks into concrete, checked actions.
+- **Scenario agent.** Runs the four what if scenarios and compares them.
+- **Explanation agent.** Builds the facts the assistant needs and narrates them.
+
+The orchestrator adds three things on top of the plain sequence. First, it stops on the first agent
+that fails, so a broken step never produces a half made plan. Second, it can retry a step that fails
+for a recoverable reason. Third, it supports human in the loop approval gates: the workflow can pause
+after a named agent, wait for a planner to approve, and then resume from the next agent without redoing
+the earlier work. This full workflow is available through the backend orchestration endpoints and is
+kept separate from the fast, single click planning path used by the dashboard.
 
 ---
 
@@ -201,6 +225,10 @@ models are trained on historical data and loaded at runtime. They predict:
 These signals feed the risk views and the insight charts. Keeping them out of the scheduling decision
 is deliberate, because the scheduling must stay deterministic and explainable.
 
+The models are trained once from the historical data with a training script and saved to disk as
+saved model files. At runtime they are loaded on demand and cached. If the models have not been
+trained yet, the app still runs and simply skips the predictive views rather than failing.
+
 ---
 
 ## 10. The explain only assistant
@@ -271,12 +299,15 @@ A few interface choices worth noting:
 |-------|-----------|
 | Backend framework | Python, FastAPI |
 | Optimizer | Google OR-Tools CP-SAT |
+| Agent workflow | Microsoft Agent Framework |
 | Data models | Pydantic |
-| Machine learning | scikit learn style models loaded via joblib |
+| Data handling | pandas, numpy |
+| Machine learning | scikit learn style models saved and loaded with joblib |
+| Server side charts | Matplotlib (for emailed and downloaded chart images) |
 | Assistant | Azure OpenAI, explain only |
 | Frontend framework | React 18, TypeScript |
 | Build tool | Vite |
-| Charts | Recharts |
+| Frontend charts | Recharts |
 | Data storage | CSV snapshots and JSON outputs per date |
 
 ---

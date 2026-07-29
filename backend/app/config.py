@@ -97,7 +97,10 @@ class Settings(BaseSettings):
 
     # Auto-commit the best what-if scenario when it clearly beats the committed
     # plan: on-time delivery improves by >= gain AND cost rises by <= increase.
-    auto_commit_best_enabled: bool = False
+    # Enabled by default so each fresh daily plan adopts the best plan on its own
+    # (still gated by the thresholds below, so a day with no clearly better
+    # what-if correctly stays on the Current Plan).
+    auto_commit_best_enabled: bool = True
     auto_commit_min_otd_gain: float = 0.03
     auto_commit_max_cost_increase: float = 15000.0
 

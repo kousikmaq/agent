@@ -407,9 +407,18 @@ class PlanningOrchestrator:
         kpis = self._analytics.compute(transformed, schedule)
         risks = self._risk.detect(transformed, schedule, kpis)
         recommendations = self._recommendation.recommend(transformed, schedule, risks)
-        scenario_comparison = existing_scenarios or _light_comparison(
-            business_date, kpis
-        )
+        # A modification re-plan is layered on the ORIGINAL day state, not on a
+        # committed what-if. The plan in use is therefore a modified
+        # CURRENT_PLAN, not whatever scenario was previously applied: reset the
+        # committed marker to CURRENT_PLAN (and refresh its row to the modified
+        # KPIs) so the Scenarios tab does not keep showing a stale scenario as
+        # "in use".
+        if existing_scenarios is not None:
+            scenario_comparison = _comparison_with_applied(
+                existing_scenarios, ScenarioType.CURRENT_PLAN, kpis
+            )
+        else:
+            scenario_comparison = _light_comparison(business_date, kpis)
 
         context = self._explanation.build(
             business_date=business_date,
@@ -1713,9 +1722,15 @@ class PlanningOrchestrator:
         kpis = self._analytics.compute(transformed, schedule)
         risks = self._risk.detect(transformed, schedule, kpis)
         recommendations = self._recommendation.recommend(transformed, schedule, risks)
-        scenario_comparison = existing_scenarios or _light_comparison(
-            business_date, kpis
-        )
+        # The rebuilt plan is the original baseline plus any remaining
+        # modifications, i.e. a CURRENT_PLAN variant, so mark CURRENT_PLAN as the
+        # committed plan rather than leaving a previously applied scenario stale.
+        if existing_scenarios is not None:
+            scenario_comparison = _comparison_with_applied(
+                existing_scenarios, ScenarioType.CURRENT_PLAN, kpis
+            )
+        else:
+            scenario_comparison = _light_comparison(business_date, kpis)
 
         context = self._explanation.build(
             business_date=business_date,

@@ -249,6 +249,21 @@ export function ScenarioComparison({
 
   return (
     <div className="scenario-panel">
+      {committedName && (
+        <div className="scenario-inuse-banner">
+          <span className="scenario-inuse-dot" aria-hidden>
+            ✓
+          </span>
+          <span>
+            Currently using:{" "}
+            <strong>{committedName}</strong>
+            {committedName === baselineName
+              ? " (baseline / original plan)"
+              : ""}
+          </span>
+        </div>
+      )}
+
       <p className="panel-note">
         Four what-if plans solved against today's data. Pick a scenario to open
         its page, review the full breakdown, and choose the plan that fits.

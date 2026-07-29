@@ -764,6 +764,23 @@ export function DashboardPage({
 
       {!showSkeleton && data && (
         <>
+          <div className="inuse-pill">
+            <span className="inuse-pill-dot" aria-hidden>
+              ✓
+            </span>
+            <span>
+              Currently using:{" "}
+              <strong>
+                {data.scenarios.results.find(
+                  (r) => r.scenario_type === data.scenarios.committed_type
+                )?.name ?? "Current Plan"}
+              </strong>
+              {data.scenarios.committed_type === "CURRENT_PLAN"
+                ? " (baseline / original plan)"
+                : ""}
+            </span>
+          </div>
+
           <section className="kpi-section">
             <KpiDashboard kpis={data.kpis} />
           </section>
