@@ -81,6 +81,20 @@ def add_machine_capacity(model: "SchedulingModel") -> None:
         if len(intervals) > 1:
             cp.AddNoOverlap(intervals)
 
+    # Lot splitting: the parallel sub-lots of one prioritised operation must run
+    # on DISTINCT machines, otherwise the machine no-overlap would serialise them
+    # and defeat the purpose. At most one sub-lot of a group may pick any machine.
+    for group in model.split_groups:
+        machine_ids = {mid for task in group for mid in task.machine_presence}
+        for machine_id in machine_ids:
+            literals = [
+                task.machine_presence[machine_id]
+                for task in group
+                if machine_id in task.machine_presence
+            ]
+            if len(literals) > 1:
+                cp.Add(sum(literals) <= 1)
+
 
 def _add_batch_machine(
     model: "SchedulingModel",

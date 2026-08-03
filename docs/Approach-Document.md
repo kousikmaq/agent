@@ -21,14 +21,19 @@ The whole system is shaped by a few rules that were set early and held throughou
    from yesterday's for no reason.
 2. **The language model never decides anything.** It only explains results and answers questions. All
    real decisions come from the solver and from fixed business rules.
-3. **Analysis is read only.** The parts that detect risks, build recommendations, run scenarios, and
-   compute KPIs never change the schedule. Only the planning step and explicit planner actions change
-   it.
+3. **Changes to the plan are controlled and reversible.** Analysis (risk, recommendations, scenarios,
+   KPIs) never changes the schedule. The schedule is changed only by the planning step, by an explicit
+   planner action, or by an autonomous action. Every change, whoever makes it, is logged with before
+   and after numbers and can be undone.
 4. **Everything is explainable.** Every plan change is logged with before and after numbers, and the
    assistant can explain any part of the plan from the real data.
 5. **The data source is replaceable.** The factory data comes from a simulator today, but it sits
    behind a clean boundary so a live ERP or MES feed can replace it later without touching the
    planning logic.
+6. **The agent can act on its own, safely.** The system does not only wait for a planner. On a daily
+   rhythm it can run the plan, adopt a clearly better option, reorder short materials, relieve a
+   bottleneck, and send a briefing, all within configured limits. Each autonomous action is optional,
+   rule gated, logged, and reversible, and a planner can always review or override it.
 
 ---
 
@@ -37,8 +42,8 @@ The whole system is shaped by a few rules that were set early and held throughou
 The system has three parts.
 
 - **Backend.** Python with FastAPI. Holds the optimizer, the business rules, the analytics, the risk
-  and recommendation engines, the scenario engine, the assistant, and the daily simulator. All
-  endpoints live under `/api/v1`.
+  and recommendation engines, the scenario engine, the assistant, the daily simulator, and the
+  autonomous engine with its background scheduler. All endpoints live under `/api/v1`.
 - **Frontend.** React with TypeScript, built with Vite. A dashboard for planning and a separate live
   operations page. Charts use Recharts.
 - **Data.** Daily factory snapshots stored as CSV files per date. Planning outputs are stored per date
@@ -71,6 +76,10 @@ Data source (CSV simulator today, ERP or MES later)
 The diagram below shows the path a production planner takes through the app on a normal day, from
 signing in to committing a plan and communicating it. The steps in the middle can be repeated as often
 as needed before the planner commits.
+
+Often the planner starts a step ahead, because the agent has already run overnight (see section 12). In
+that case the plan for the day is ready, some safe actions may already be done, and the planner mainly
+reviews what the agent did in the Live Operations feed and adjusts anything they disagree with.
 
 ![User workflow for a production planner](img/user-workflow.png)
 
@@ -264,12 +273,71 @@ scenarios look identical and tight due dates gridlock the day.
 
 ---
 
-## 12. Automation and cadence
+## 12. Autonomous operation and cadence
 
-A background scheduler keeps plans current without a planner having to trigger every run. It refreshes
-today's plan and, on the weekly refresh day, publishes the plans for the next week. It is idempotent,
-so a day that is already planned is never recomputed, and it is disabled during tests. It runs in a
-background thread so solving never blocks the interface or the API.
+The agent does not only wait for a planner to press a button. It runs on a daily rhythm and can take a
+set of safe, useful actions on its own. This is what turns it from a planning tool into an autonomous
+agent.
+
+### The daily rhythm
+
+A lightweight background thread starts with the application and runs one cycle at startup and again a
+few minutes after each local midnight. Each cycle does the following:
+
+- Make sure today's data snapshot exists (generate it if missing).
+- Make sure today's plan exists (run the full pipeline if missing).
+- Run the autonomous action bundle for the day.
+- On Saturdays, also publish the plans for the whole next week (Monday to Saturday).
+
+The cycle is idempotent. A day that is already generated and planned is skipped, so restarting the
+server or running the cycle again never recomputes or disturbs an existing plan.
+
+### The autonomous action bundle
+
+After a fresh daily plan, the agent works through a fixed decision tree. The steps are ordered so that
+plan changes never fight each other: at most one of the plan changing steps is applied per cycle.
+
+![The autonomous daily cycle and decision tree](img/autonomy-cycle.png)
+
+The capabilities are:
+
+1. **Reorder low materials.** Places purchase orders for materials that are below both their safety
+   stock and reorder point. This is independent of the schedule, so it always runs when enabled.
+2. **Choose the best single plan change.** The agent evaluates these in order and applies the first
+   one that fits, so the plan is only changed once:
+   - **Resolve conflicts.** Fix simple worker or maintenance clashes first, because correctness comes
+     before optimisation.
+   - **Commit the best what-if.** Adopt a scenario that clearly beats the current plan, meaning on time
+     delivery improves by at least a set amount while cost rises by no more than a set limit.
+   - **Enable overtime on risk.** When enough orders are at risk, apply the overtime plan if it lifts
+     on time delivery.
+   - **Prioritise late orders.** Re-plan to protect high priority orders that are running late.
+   - **Re-balance a bottleneck.** When one machine is saturated and another is idle, move work to the
+     backup machine if that helps.
+3. **Escalate severely late orders.** Email an escalation when orders are projected to miss their due
+   date by more than a set number of days.
+4. **Send a morning briefing.** Email a short summary of the plan and of exactly what the agent did.
+
+Each capability is controlled by its own setting. Most are off by default and are turned on per site;
+adopting the best plan is on by default because it is safe (it only switches to an option that is
+already computed and clearly better). Every threshold, such as the required on time gain or the cost
+limit, is configurable rather than hard coded.
+
+### Activity feed and oversight
+
+Every real action the agent takes is written to a per day activity feed. A no-op step is not recorded,
+so the feed shows exactly what happened and nothing that did not. The Live Operations page reads this
+feed and shows the full catalogue of capabilities: the ones that acted carry their recorded detail and
+impact, and the rest are shown as standing by, along with the condition that would trigger them.
+
+Because every autonomous change goes through the same logged and reversible path as a manual change, a
+planner keeps full control. They can see what the agent did, understand why, and undo it. The same
+bundle can also be triggered on demand through the API, either respecting the on and off settings or
+running every step for a one time catch up.
+
+The autonomous engine is deliberately rule based. It uses thresholds and the deterministic solver, not
+the language model or the predictive models, to decide what to do. This keeps its behaviour
+predictable and easy to audit.
 
 ---
 
@@ -322,3 +390,7 @@ A few interface choices worth noting:
   between runs. The primary metric, tardiness, stays reliable, and the compute once caching hides this
   from the planner in day to day use.
 - **Email and orders.** These run in a simulated or local mode unless real mail settings are supplied.
+- **Autonomous defaults.** Most autonomous actions are off by default and are switched on per site once
+  the team is comfortable, so the agent starts conservative. Adopting a clearly better plan is the one
+  action on by default. Every autonomous action is logged and reversible, so turning them on is low
+  risk.

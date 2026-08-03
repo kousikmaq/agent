@@ -97,4 +97,15 @@ def write_state(
 
     _write_routings(directory, state.routings)
     _write_change_log(directory, change_log)
+
+    # Additionally mirror the snapshot into the global SQLite database
+    # (datasets/factory.db). No-op when SQLite is disabled; CSV output above
+    # is always written so the existing flow is never affected.
+    from app.ingestion.sqlite_store import maybe_get_store
+
+    store = maybe_get_store(datasets_dir)
+    if store is not None:
+        store.save_state(state)
+        store.save_change_log(change_log)
+
     return directory

@@ -13,6 +13,7 @@ const KIND_META: Record<
 > = {
   reorder: { icon: "📦", color: "#2563eb", label: "Materials" },
   conflict: { icon: "🔀", color: "#7c3aed", label: "Conflict" },
+  optimize: { icon: "🛡️", color: "#059669", label: "Lowest risk" },
   commit: { icon: "✅", color: "#059669", label: "Best plan" },
   overtime: { icon: "⚡", color: "#d97706", label: "Overtime" },
   remediate: { icon: "🎯", color: "#dc2626", label: "Remediate" },

@@ -17,6 +17,7 @@ import type {
   GenerateDataResponse,
   KpiSet,
   OrchestrationResult,
+  OptimizeGoalResponse,
   PlaceOrderRequest,
   PurchaseOrder,
   PlanModifications,
@@ -25,6 +26,7 @@ import type {
   RiskReport,
   RolesResponse,
   ScenarioComparison,
+  ScenarioRecommendation,
   AutoRemediateResult,
   ScheduleResult,
   ShopFloorStatus,
@@ -169,6 +171,20 @@ export const api = {
     request<ScheduleResult>(`/scenarios/${date}/apply`, {
       method: "POST",
       body: JSON.stringify({ scenario_type, max_time_seconds }),
+    }),
+
+  /** Plan by a natural-language goal: LLM picks the objective weighting, the
+   * solver re-solves. Pass apply=false to preview the weighting only. */
+  optimizeGoal: (date: string, goal: string, apply = true) =>
+    request<OptimizeGoalResponse>(`/scenarios/${date}/optimize-goal`, {
+      method: "POST",
+      body: JSON.stringify({ goal, apply }),
+    }),
+
+  /** Ask the advisor which solved scenario to commit (read-only advice). */
+  recommendScenario: (date: string) =>
+    request<ScenarioRecommendation>(`/scenarios/${date}/recommend`, {
+      method: "POST",
     }),
 
   getDeliveries: (date: string, horizon = 7) =>

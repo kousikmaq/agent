@@ -10,6 +10,8 @@ import type {
   RecommendationSet,
   RiskReport,
   ScenarioComparison as ScenarioComparisonType,
+  ScenarioRecommendation,
+  OptimizeGoalResponse,
   ScheduleResult,
   WeeklyPlanReport,
 } from "../types/api";
@@ -133,6 +135,10 @@ export function DashboardPage({
   const [nextWeekOpen, setNextWeekOpen] = useState(false);
   // Name of the scenario currently being applied as the committed plan.
   const [applyingScenario, setApplyingScenario] = useState<string | null>(null);
+  // True while the AI goal-planner is re-solving the day.
+  const [optimizingGoal, setOptimizingGoal] = useState(false);
+  // True while the AI scenario recommender is thinking.
+  const [recommending, setRecommending] = useState(false);
   // risk_id currently being re-planned via priority mitigation.
   const [mitigatingRisk, setMitigatingRisk] = useState<string | null>(null);
   // Applied-modification log for the current plan (before/after KPIs).
@@ -144,10 +150,15 @@ export function DashboardPage({
   const [removingMod, setRemovingMod] = useState<string | null>(null);
   // Whether an Orders-tab priority re-plan is running.
   const [replanningOrders, setReplanningOrders] = useState(false);
-  // Whether an autonomous remediation run is in progress.
-  const [autoRemediating, setAutoRemediating] = useState(false);
   // Whether the full autonomy bundle is running.
   const [runningAutonomy, setRunningAutonomy] = useState(false);
+  // Outcome of the last full-autonomy run for the selected date (drives the
+  // Risks-tab banner and the Undo button). Cleared on a fresh load / revert.
+  const [autonomyOutcome, setAutonomyOutcome] = useState<{
+    before: number;
+    scenario: string | null;
+    changed: boolean;
+  } | null>(null);
   // The scenario currently selected on the Scenarios tab (for its email).
   const [selectedScenarioType, setSelectedScenarioType] = useState<string | null>(
     null
@@ -205,7 +216,8 @@ export function DashboardPage({
     setModificationsLoading(true);
     // A fresh plan load re-assesses risks, so clear planner status markers.
     setRiskStatus({});
-    try {
+    // A fresh load supersedes any prior autonomy banner for the day.
+    setAutonomyOutcome(null);    try {
       const [schedule, kpis, risks, recommendations, scenarios] =
         await Promise.all([
           api.getSchedule(date),
@@ -337,60 +349,28 @@ export function DashboardPage({
     }
   }
 
-  async function onAutoRemediate() {
-    if (!selectedDate || autoRemediating) return;
-    const ok = window.confirm(
-      `Let the agent auto-remediate ${selectedDate}?\n\n` +
-        "It detects high-priority (0–1) orders running late and re-plans to " +
-        "prioritise them. This is reversible and recorded in the Current Plan log."
-    );
-    if (!ok) return;
-    setAutoRemediating(true);
-    setStatus(`Agent is checking ${selectedDate} for high-priority late orders…`);
-    try {
-      const r = await api.autoRemediate(selectedDate);
-      if (r.triggered) {
-        await loadResults(selectedDate);
-        const otd =
-          r.before_otd != null && r.after_otd != null
-            ? ` OTD ${(r.before_otd * 100).toFixed(1)}% → ${(r.after_otd * 100).toFixed(1)}%.`
-            : "";
-        setStatus(
-          `Auto-remediated ${selectedDate}: prioritised ${r.critical_orders.length} ` +
-            `high-priority late order(s)${r.emailed ? " (email sent)" : ""}.${otd}`
-        );
-        setTab("current");
-      } else {
-        setStatus(
-          `No autonomous action needed for ${selectedDate} — no high-priority orders are late.`
-        );
-      }
-    } catch {
-      setStatus("Autonomous remediation failed.");
-    } finally {
-      setAutoRemediating(false);
-    }
-  }
-
   async function onRunAutonomy() {
     if (!selectedDate || runningAutonomy) return;
     const ok = window.confirm(
       `Run the full agent autonomy for ${selectedDate}?\n\n` +
-        "The agent will: resolve simple conflicts, prioritise high-priority late " +
-        "orders, reorder low materials, auto-commit the best plan (within " +
-        "thresholds), enable overtime when delivery risk is high, relieve any " +
-        "bottleneck, escalate severely late orders, and email a briefing. All " +
-        "actions are reversible and logged."
+        "The agent will: reorder low materials, resolve simple conflicts, commit " +
+        "the lowest-risk plan to clear the most critical/high risks (or prioritise " +
+        "late orders when no plan is better), escalate severely late orders, and " +
+        "email a briefing. All actions are reversible and logged."
     );
     if (!ok) return;
     setRunningAutonomy(true);
     setStatus(`Agent is running autonomous actions for ${selectedDate}…`);
+    const risksBefore = data?.risks?.risks.length ?? 0;
     try {
       const r = (await api.runAutonomy(selectedDate)) as {
         conflicts?: { resolved?: boolean; count?: number };
-        commit_best?: { committed?: boolean; best?: string };
-        overtime?: { applied?: boolean; at_risk?: number };
-        rebalance?: { rebalanced?: boolean };
+        optimize?: {
+          optimized?: boolean;
+          scenario?: string;
+          risk_count_before?: number;
+          risk_count_after?: number;
+        };
         reorder?: { count?: number };
         remediate?: { triggered?: boolean; critical_orders?: string[] };
         escalation?: { escalated?: boolean; count?: number };
@@ -398,22 +378,36 @@ export function DashboardPage({
       };
       await loadResults(selectedDate);
       const parts: string[] = [];
+      if (r.reorder?.count) parts.push(`placed ${r.reorder.count} PO(s)`);
       if (r.conflicts?.resolved)
         parts.push(`resolved ${r.conflicts.count ?? 0} conflict(s)`);
+      if (r.optimize?.optimized) {
+        const before = r.optimize.risk_count_before;
+        const after = r.optimize.risk_count_after;
+        const span =
+          before != null && after != null ? ` (risks ${before} → ${after})` : "";
+        parts.push(`committed the lowest-risk '${r.optimize.scenario}' plan${span}`);
+      }
       if (r.remediate?.triggered)
-        parts.push(`prioritised ${r.remediate.critical_orders?.length ?? 0} order(s)`);
-      if (r.reorder?.count) parts.push(`placed ${r.reorder.count} PO(s)`);
-      if (r.commit_best?.committed) parts.push(`switched to '${r.commit_best.best}' plan`);
-      if (r.overtime?.applied) parts.push("enabled overtime");
-      if (r.rebalance?.rebalanced) parts.push("re-balanced a bottleneck");
+        parts.push(`prioritised ${r.remediate.critical_orders?.length ?? 0} late order(s)`);
       if (r.escalation?.escalated)
         parts.push(`escalated ${r.escalation.count ?? 0} late order(s)`);
       if (r.briefing_sent) parts.push("emailed a briefing");
+      const changed = Boolean(
+        r.optimize?.optimized || r.remediate?.triggered || r.conflicts?.resolved
+      );
+      setAutonomyOutcome({
+        before: risksBefore,
+        scenario: r.optimize?.scenario ?? null,
+        changed,
+      });
       setStatus(
         parts.length
           ? `Agent autonomy for ${selectedDate}: ${parts.join(", ")}.`
           : `Agent autonomy for ${selectedDate}: no changes were needed.`
       );
+      // Stay on the Risks tab so the reduced risk list and the outcome banner
+      // (with the Undo action) are visible right where the run was triggered.
     } catch {
       setStatus("Agent autonomy run failed.");
     } finally {
@@ -501,6 +495,23 @@ export function DashboardPage({
     }
   }
 
+  async function onUndoAutonomy() {
+    if (!selectedDate || busy) return;
+    setBusy(true);
+    setStatus(`Undoing agent changes for ${selectedDate}…`);
+    try {
+      await api.revertPlan(selectedDate);
+      await loadResults(selectedDate);
+      setStatus(
+        `Undid agent changes for ${selectedDate} — the original plan and all earlier risks are restored.`
+      );
+    } catch {
+      setStatus("Failed to undo the agent changes.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onApplyScenario(scenarioType: string, name: string) {
     if (!selectedDate || applyingScenario) return;
     const isBaseline = scenarioType === "CURRENT_PLAN";
@@ -532,6 +543,45 @@ export function DashboardPage({
       setStatus(`Failed to apply the "${name}" plan.`);
     } finally {
       setApplyingScenario(null);
+    }
+  }
+
+  // Plan by a natural-language goal: the LLM picks the objective weighting, the
+  // solver re-solves, and the dashboard reloads against the new plan.
+  async function onOptimizeGoal(
+    goal: string
+  ): Promise<OptimizeGoalResponse | null> {
+    if (!selectedDate || optimizingGoal) return null;
+    setOptimizingGoal(true);
+    setStatus(`Optimising ${selectedDate} for your goal…`);
+    try {
+      const res = await api.optimizeGoal(selectedDate, goal);
+      if (res.applied) await loadResults(selectedDate);
+      setStatus(
+        !res.applied
+          ? res.proposal.rationale || "That doesn't look like a planning goal."
+          : `Re-planned for: ${res.proposal.strategy || goal}.`
+      );
+      return res;
+    } catch {
+      setStatus("Failed to plan for that goal.");
+      return null;
+    } finally {
+      setOptimizingGoal(false);
+    }
+  }
+
+  // Ask the advisor which solved scenario to commit (read-only advice).
+  async function onRecommendScenario(): Promise<ScenarioRecommendation | null> {
+    if (!selectedDate || recommending) return null;
+    setRecommending(true);
+    try {
+      return await api.recommendScenario(selectedDate);
+    } catch {
+      setStatus("Failed to get a scenario recommendation.");
+      return null;
+    } finally {
+      setRecommending(false);
     }
   }
 
@@ -683,9 +733,9 @@ export function DashboardPage({
   const mutating =
     busy ||
     replanningOrders ||
-    autoRemediating ||
     runningAutonomy ||
     applyingScenario !== null ||
+    optimizingGoal ||
     mitigatingRisk !== null ||
     reapplyingMod !== null ||
     removingMod !== null;
@@ -695,6 +745,17 @@ export function DashboardPage({
   const visibleTabs = isNextDayPlan
     ? TABS.filter((t) => !NEXT_DAY_HIDDEN.includes(t.id))
     : TABS;
+
+  // Remaining-risk breakdown for the autonomy banner: risks that scheduling
+  // cannot clear (materials/inventory need procurement) versus residual
+  // capacity limits at the best achievable plan.
+  const remainingRisks = data?.risks?.risks ?? [];
+  const procurementRemaining = remainingRisks.filter(
+    (r) =>
+      r.risk_type === "INVENTORY_BELOW_SAFETY_STOCK" ||
+      r.risk_type === "MATERIAL_SHORTAGE"
+  ).length;
+  const capacityRemaining = remainingRisks.length - procurementRemaining;
 
   // Open the assistant and ask it to explain the current Gantt chart in plain
   // language. "gantt" is the machine-grouped view; "machines" is order-grouped.
@@ -820,23 +881,9 @@ export function DashboardPage({
                   <button
                     type="button"
                     className="action-btn ab-ghost"
-                    onClick={onAutoRemediate}
-                    disabled={autoRemediating}
-                    title="Let the agent auto-detect high-priority (0–1) late orders and re-plan to prioritise them"
-                  >
-                    <span className="ab-icon" aria-hidden>
-                      🤖
-                    </span>
-                    {autoRemediating ? "Auto-remediating…" : "Auto-remediate high-priority"}
-                  </button>
-                )}
-                {tab === "risks" && (
-                  <button
-                    type="button"
-                    className="action-btn ab-ghost"
                     onClick={onRunAutonomy}
                     disabled={runningAutonomy}
-                    title="Run the full agent autonomy: remediate, reorder, auto-commit best plan, rebalance, and email a briefing"
+                    title="Run the full agent autonomy: reorder materials, resolve conflicts, commit the lowest-risk plan to clear the most risks, and email a briefing"
                   >
                     <span className="ab-icon" aria-hidden>
                       ⚡
@@ -924,6 +971,80 @@ export function DashboardPage({
               ) : (
                 <p className="empty">No materials data for this day.</p>
               ))}
+            {tab === "risks" && autonomyOutcome && (
+              <div
+                className={`autonomy-banner ${
+                  autonomyOutcome.changed ? "is-applied" : "is-noop"
+                }`}
+                role="status"
+              >
+                <span className="autonomy-banner-icon" aria-hidden>
+                  {autonomyOutcome.changed ? "⚡" : "ℹ️"}
+                </span>
+                <div className="autonomy-banner-body">
+                  {autonomyOutcome.changed ? (
+                    <>
+                      <strong>
+                        Agent re-planned the day{" "}
+                        {autonomyOutcome.scenario
+                          ? `(committed the '${autonomyOutcome.scenario}' plan)`
+                          : ""}
+                        : risks {autonomyOutcome.before} → {remainingRisks.length}.
+                      </strong>{" "}
+                      {remainingRisks.length > 0 ? (
+                        <span>
+                          The remaining {remainingRisks.length} can’t be cleared by
+                          re-scheduling
+                          {procurementRemaining > 0
+                            ? ` — ${procurementRemaining} need procurement (materials / stock below safety level)`
+                            : ""}
+                          {capacityRemaining > 0
+                            ? `${procurementRemaining > 0 ? ", and " : " — "}${capacityRemaining} are capacity limits already at the best achievable plan`
+                            : ""}
+                          . Use <em>Undo changes</em> to restore the original plan and
+                          all earlier risks.
+                        </span>
+                      ) : (
+                        <span>All risks resolved.</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <strong>
+                        No further scheduling improvement is possible for this plan.
+                      </strong>{" "}
+                      {remainingRisks.length > 0 && (
+                        <span>
+                          The {remainingRisks.length} open risk(s) can’t be fixed by
+                          re-scheduling
+                          {procurementRemaining > 0
+                            ? ` — ${procurementRemaining} need procurement (materials / stock)`
+                            : ""}
+                          {capacityRemaining > 0
+                            ? `${procurementRemaining > 0 ? ", and " : " — "}${capacityRemaining} are capacity limits`
+                            : ""}
+                          .
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+                {autonomyOutcome.changed && (
+                  <button
+                    type="button"
+                    className="action-btn ab-ghost autonomy-banner-undo"
+                    onClick={onUndoAutonomy}
+                    disabled={busy}
+                    title="Discard the agent's changes and restore the original plan and all earlier risks"
+                  >
+                    <span className="ab-icon" aria-hidden>
+                      ↩️
+                    </span>
+                    {busy ? "Undoing…" : "Undo changes"}
+                  </button>
+                )}
+              </div>
+            )}
             {tab === "risks" && (
               <RiskPanel
                 report={data.risks}
@@ -944,6 +1065,10 @@ export function DashboardPage({
                 applying={applyingScenario}
                 committedType={data.scenarios.committed_type}
                 onSelect={setSelectedScenarioType}
+                onOptimizeGoal={onOptimizeGoal}
+                optimizingGoal={optimizingGoal}
+                onRecommend={onRecommendScenario}
+                recommending={recommending}
               />
             )}
             {tab === "current" &&

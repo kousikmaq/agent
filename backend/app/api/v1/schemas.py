@@ -44,6 +44,26 @@ class ApplyScenarioRequest(BaseModel):
     )
 
 
+class OptimizeGoalRequest(BaseModel):
+    """Request body to plan by a natural-language goal.
+
+    The goal is turned into a validated objective weighting by the LLM planning
+    advisor and the day is re-solved under it. When ``apply`` is false only the
+    proposed weighting is returned (a preview), without committing a new plan.
+    """
+
+    goal: str = Field(
+        ..., min_length=1, description="Plain-English planning goal for the day."
+    )
+    apply: bool = Field(
+        default=True,
+        description="Re-solve and commit the plan (true) or only preview weights (false).",
+    )
+    max_time_seconds: float | None = Field(
+        default=None, gt=0, description="Optional solver time budget override."
+    )
+
+
 class MitigateOrdersRequest(BaseModel):
     """Request body to raise the priority of delayed orders and re-solve."""
 

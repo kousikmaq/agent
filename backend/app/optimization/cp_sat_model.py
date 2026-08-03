@@ -53,6 +53,8 @@ class Task:
     interval: cp_model.IntervalVar
     machine_presence: dict[str, cp_model.IntVar] = field(default_factory=dict)
     worker_presence: dict[str, cp_model.IntVar] = field(default_factory=dict)
+    sublot_index: int = 0
+    sublot_count: int = 1
 
     @property
     def key(self) -> tuple[str, str]:
@@ -76,6 +78,9 @@ class SchedulingModel:
         # Populated during build().
         self.tasks: list[Task] = []
         self.tasks_by_order: dict[str, list[Task]] = {}
+        # Sub-lot groups for lot-split operations (each inner list is the set of
+        # parallel sub-lots of one prioritised operation).
+        self.split_groups: list[list[Task]] = []
         self.machine_optional_intervals: dict[str, list[cp_model.IntervalVar]] = {}
         self.machine_blocked_intervals: dict[str, list[cp_model.IntervalVar]] = {}
         self.worker_optional_intervals: dict[str, list[cp_model.IntervalVar]] = {}
@@ -279,10 +284,41 @@ class SchedulingModel:
         run = math.ceil(operation.run_minutes_per_unit * quantity)
         return max(1, operation.setup_minutes + run)
 
+    def _split_count(self, order: ProductionOrder, operation: Operation) -> int:
+        """How many parallel machines to split this operation across.
+
+        Returns 1 (no split) unless lot splitting is enabled AND the order is
+        prioritised (priority at/above the threshold) AND the operation has at
+        least two eligible, non-batch machines. Batch work centres (paint/QC)
+        already parallelise via batching, so they are never lot-split. The count
+        is capped by the configured maximum, the eligible-machine count and the
+        order quantity (a sub-lot must make at least one unit).
+        """
+        if not self.options.enable_lot_splitting:
+            return 1
+        if order.priority < self.options.lot_split_priority_threshold:
+            return 1
+        eligible = self.eligible_machines(operation)
+        if len(eligible) < 2 or any(mid in self.batch_machines for mid in eligible):
+            return 1
+        return max(
+            1,
+            min(self.options.lot_split_max_parallel, len(eligible), order.quantity),
+        )
+
     def _create_tasks(self) -> None:
-        """Create one task (with time variables) per schedulable operation."""
-        # First pass: gather durations to bound the horizon.
-        planned: list[tuple[ProductionOrder, Operation, int, int, int]] = []
+        """Create one task (with time variables) per schedulable operation.
+
+        A prioritised order's operation may be split into several parallel
+        sub-lots (see :meth:`_split_count`), each becoming its own task so the
+        pieces can run on different machines at the same time.
+        """
+        # First pass: gather durations (expanding sub-lots) to bound the horizon.
+        # Each entry: (order, operation, index, duration, release, group_key,
+        #              sublot_index, sublot_count).
+        planned: list[
+            tuple[ProductionOrder, Operation, int, int, int, tuple[str, str] | None, int, int]
+        ] = []
         max_release = 0
         for order in self.state.production_orders:
             if order.status not in _SCHEDULABLE_STATUSES:
@@ -297,8 +333,22 @@ class SchedulingModel:
             release = max(0, self.date_to_minute(order.release_date))
             max_release = max(max_release, release)
             for index, operation in enumerate(routing.operations):
-                duration = self._duration_minutes(operation, order.quantity)
-                planned.append((order, operation, index, duration, release))
+                splits = self._split_count(order, operation)
+                if splits <= 1:
+                    duration = self._duration_minutes(operation, order.quantity)
+                    planned.append(
+                        (order, operation, index, duration, release, None, 0, 1)
+                    )
+                    continue
+                # Divide the quantity as evenly as possible across sub-lots.
+                base_qty, remainder = divmod(order.quantity, splits)
+                group_key = (order.order_id, operation.operation_id)
+                for sub in range(splits):
+                    share = base_qty + (1 if sub < remainder else 0)
+                    duration = self._duration_minutes(operation, share)
+                    planned.append(
+                        (order, operation, index, duration, release, group_key, sub, splits)
+                    )
 
         if not planned:
             return
@@ -319,12 +369,21 @@ class SchedulingModel:
         )
 
         # Second pass: create the decision variables.
-        for order, operation, index, duration, release in planned:
-            start = self.model.NewIntVar(release, self.horizon, f"start_{order.order_id}_{operation.operation_id}")
-            end = self.model.NewIntVar(0, self.horizon, f"end_{order.order_id}_{operation.operation_id}")
-            interval = self.model.NewIntervalVar(
-                start, duration, end, f"iv_{order.order_id}_{operation.operation_id}"
-            )
+        groups: dict[tuple[str, str], list[Task]] = {}
+        for (
+            order,
+            operation,
+            index,
+            duration,
+            release,
+            group_key,
+            sub_index,
+            sub_count,
+        ) in planned:
+            suffix = f"{order.order_id}_{operation.operation_id}_{sub_index}"
+            start = self.model.NewIntVar(release, self.horizon, f"start_{suffix}")
+            end = self.model.NewIntVar(0, self.horizon, f"end_{suffix}")
+            interval = self.model.NewIntervalVar(start, duration, end, f"iv_{suffix}")
             task = Task(
                 order=order,
                 operation=operation,
@@ -333,9 +392,15 @@ class SchedulingModel:
                 start=start,
                 end=end,
                 interval=interval,
+                sublot_index=sub_index,
+                sublot_count=sub_count,
             )
             self.tasks.append(task)
             self.tasks_by_order.setdefault(order.order_id, []).append(task)
+            if group_key is not None:
+                groups.setdefault(group_key, []).append(task)
+
+        self.split_groups = [g for g in groups.values() if len(g) > 1]
 
         # Order completion + makespan variables.
         self.makespan = self.model.NewIntVar(0, self.horizon, "makespan")

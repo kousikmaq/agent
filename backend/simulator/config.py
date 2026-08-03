@@ -21,6 +21,25 @@ class SimulatorConfig(BaseModel):
         default=42, description="Base RNG seed; combined with the date per day."
     )
 
+    # --- Global scale ---
+    # A single multiplier that grows the master-data CATALOG proportionally:
+    # finished products, raw materials (and their derived inventory, BOMs,
+    # routings and operations), customers, suppliers and the opening purchase-
+    # order book all scale together. This is how the dataset reaches 500-1000+
+    # rows.
+    #
+    # The schedulable WORKING SET (production orders, workers, machines) is
+    # deliberately NOT scaled by this knob: the CP-SAT scheduler degrades sharply
+    # past a few dozen orders, so scaling it would break plan health (empty /
+    # infeasible schedules). This mirrors a real plant - a large catalogue with a
+    # bounded set of active orders. Tune order volume via ``initial_production_orders``
+    # / ``new_orders_mean`` directly (with care). 1.0 = the default tuned plant.
+    scale_factor: float = Field(
+        default=1.0,
+        gt=0,
+        description="Catalog size multiplier (products, materials, customers, suppliers, POs).",
+    )
+
     # --- Factory sizing (Day-0 baseline) ---
     work_centers: list[str] = Field(
         default_factory=lambda: [
@@ -44,14 +63,14 @@ class SimulatorConfig(BaseModel):
     num_customers: int = Field(default=8, ge=1)
     num_suppliers: int = Field(default=6, ge=1)
     initial_open_purchase_orders: int = Field(default=10, ge=0)
-    initial_production_orders: int = Field(default=38, ge=0)
+    initial_production_orders: int = Field(default=24, ge=0)
     planning_horizon_days: int = Field(default=30, ge=1)
 
     # --- Order parameters ---
-    order_quantity_min: int = Field(default=50, ge=1)
-    order_quantity_max: int = Field(default=250, ge=1)
-    order_lead_days_min: int = Field(default=5, ge=0)
-    order_lead_days_max: int = Field(default=14, ge=0)
+    order_quantity_min: int = Field(default=40, ge=1)
+    order_quantity_max: int = Field(default=120, ge=1)
+    order_lead_days_min: int = Field(default=1, ge=0)
+    order_lead_days_max: int = Field(default=12, ge=0)
 
     # --- Shifts machines operate on (workers may cover all shifts) ---
     machine_operating_shift_ids: list[str] = Field(
@@ -60,9 +79,20 @@ class SimulatorConfig(BaseModel):
 
     # --- Daily event intensities ---
     new_orders_mean: float = Field(
-        default=4.0, ge=0, description="Mean number of new orders per day (Poisson-ish)."
+        default=3.6, ge=0, description="Mean number of new orders per day (Poisson-ish)."
     )
     order_cancel_probability: float = Field(default=0.03, ge=0, le=1)
+    order_completion_mean: float = Field(
+        default=2.8,
+        ge=0,
+        description=(
+            "Mean number of aged orders the plant finishes each day (Poisson). "
+            "Completed orders leave the schedulable pool, so this keeps the "
+            "backlog realistic instead of growing without bound. Kept a little "
+            "below new_orders_mean so a modest, realistic queue persists (some "
+            "orders slip past their due date) rather than draining to empty."
+        ),
+    )
     priority_change_probability: float = Field(default=0.05, ge=0, le=1)
 
     machine_breakdown_probability: float = Field(default=0.04, ge=0, le=1)
@@ -91,3 +121,32 @@ class SimulatorConfig(BaseModel):
     def seed_for_date(self, date_ordinal: int) -> int:
         """Return a deterministic per-day RNG seed derived from the base seed."""
         return self.base_seed * 1_000_003 + date_ordinal
+
+    # --- Effective (scaled) sizing ---------------------------------------
+    # The catalog generators read these instead of the raw fields so a single
+    # ``scale_factor`` sizes the master data. Only catalog entities scale here;
+    # the schedulable working set (workers, machines, orders) keeps its raw,
+    # solver-friendly values. At scale_factor == 1.0 every value equals the raw
+    # field, so default output is unchanged.
+    def _scaled(self, value: int, *, minimum: int = 1) -> int:
+        return max(minimum, round(value * self.scale_factor))
+
+    @property
+    def eff_num_finished_products(self) -> int:
+        return self._scaled(self.num_finished_products)
+
+    @property
+    def eff_num_raw_materials(self) -> int:
+        return self._scaled(self.num_raw_materials)
+
+    @property
+    def eff_num_customers(self) -> int:
+        return self._scaled(self.num_customers)
+
+    @property
+    def eff_num_suppliers(self) -> int:
+        return self._scaled(self.num_suppliers)
+
+    @property
+    def eff_initial_open_purchase_orders(self) -> int:
+        return self._scaled(self.initial_open_purchase_orders, minimum=0)

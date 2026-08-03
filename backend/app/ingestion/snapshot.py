@@ -65,6 +65,15 @@ class SnapshotManager:
             self._write_csv(directory / filename, field_names(model_cls), rows)
 
         self._write_routings(directory, state)
+
+        # Mirror into the global SQLite database (no-op when disabled). The CSV
+        # output above is always written, preserving the existing flow.
+        from app.ingestion.sqlite_store import maybe_get_store
+
+        store = maybe_get_store(self._datasets_dir)
+        if store is not None:
+            store.save_state(state)
+
         return directory
 
     # --- Internal helpers --------------------------------------------------

@@ -91,6 +91,34 @@ export interface ScenarioComparison {
   kpi_deltas: Record<string, Record<string, number>>;
 }
 
+/** A validated objective weighting the LLM derived from a planner's goal. */
+export interface WeightProposal {
+  goal: string;
+  weights: Record<string, number>;
+  strategy: string;
+  rationale: string;
+  usable: boolean;
+  fallback: boolean;
+}
+
+/** Result of planning by a natural-language goal. */
+export interface OptimizeGoalResponse {
+  proposal: WeightProposal;
+  applied: boolean;
+  kpis: Record<string, number> | null;
+  outcome: string | null;
+}
+
+/** The advisor's recommendation of which scenario to commit. */
+export interface ScenarioRecommendation {
+  business_date: string;
+  recommended_type: string;
+  recommended_name: string;
+  rationale: string;
+  considerations: string[];
+  fallback: boolean;
+}
+
 /** Result of an autonomous remediation run. */
 export interface AutoRemediateResult {
   triggered: boolean;
@@ -189,6 +217,7 @@ export interface RolesResponse {
 export type AutonomyKind =
   | "reorder"
   | "conflict"
+  | "optimize"
   | "commit"
   | "overtime"
   | "remediate"

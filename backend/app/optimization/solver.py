@@ -55,7 +55,32 @@ class SchedulingSolver:
         scenario never scores worse than the baseline just because its larger
         model is harder to solve in the time budget.
         """
-        model = SchedulingModel(state, policy, self._options).build()
+        result = self._run(state, policy, self._options, objective, warm_start)
+
+        # Graceful degradation: maintenance is the softest hard constraint (it
+        # can be deferred in reality). If enforcing it leaves no feasible plan,
+        # retry once with maintenance windows relaxed rather than returning an
+        # empty schedule, so a day is never left unplanned.
+        if result.status == SolverStatus.INFEASIBLE and self._options.enable_maintenance:
+            logger.warning(
+                "Schedule for %s infeasible with maintenance enforced; retrying "
+                "with maintenance windows relaxed (deferred).",
+                state.business_date,
+            )
+            relaxed = self._options.model_copy(update={"enable_maintenance": False})
+            result = self._run(state, policy, relaxed, objective, warm_start)
+        return result
+
+    def _run(
+        self,
+        state: FactoryState,
+        policy: RulePolicy,
+        options: SolverOptions,
+        objective: ObjectiveWeights | None,
+        warm_start: ScheduleResult | None,
+    ) -> ScheduleResult:
+        """Build and solve the model once under the given ``options``."""
+        model = SchedulingModel(state, policy, options).build()
 
         if not model.tasks:
             logger.info("No schedulable operations for %s.", state.business_date)
@@ -74,9 +99,9 @@ class SchedulingSolver:
             self._apply_warm_start(model, warm_start)
 
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = self._options.max_time_seconds
-        solver.parameters.random_seed = self._options.random_seed
-        solver.parameters.num_search_workers = self._options.num_search_workers
+        solver.parameters.max_time_in_seconds = options.max_time_seconds
+        solver.parameters.random_seed = options.random_seed
+        solver.parameters.num_search_workers = options.num_search_workers
 
         cp_status = solver.Solve(model.model)
         result = build_schedule_result(model, solver, cp_status)

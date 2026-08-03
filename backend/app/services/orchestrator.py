@@ -38,9 +38,9 @@ from app.domain.models.scenario import ScenarioComparison, ScenarioResult
 from app.domain.models.schedule import ScheduleResult
 from app.explanation import ExplanationContextBuilder
 from app.explanation.schema import ExplanationSummary
-from app.ingestion import CsvDataSource, FactoryStateLoader
+from app.ingestion import FactoryStateLoader, build_data_source
 from app.optimization import SchedulingSolver, SolverOptions
-from app.optimization.objective_spec import weights_for
+from app.optimization.objective_spec import ObjectiveWeights, weights_for
 from app.recommendation import RecommendationEngine
 from app.risk import RiskDetectionEngine
 from app.rules import BusinessRulesEngine
@@ -296,7 +296,7 @@ class PlanningOrchestrator:
         options: SolverOptions | None = None,
     ) -> None:
         self._datasets_dir = datasets_dir
-        self._loader = FactoryStateLoader(CsvDataSource(datasets_dir))
+        self._loader = FactoryStateLoader(build_data_source(datasets_dir))
         self._store = ResultsStore(outputs_dir)
         self._default_options = options or SolverOptions.from_settings()
 
@@ -388,6 +388,8 @@ class PlanningOrchestrator:
         options: SolverOptions,
         mod_entries: list[PlanModification],
         replace: bool = False,
+        weights: ObjectiveWeights | None = None,
+        warm_start: ScheduleResult | None = None,
     ) -> PlanningResult:
         """Solve a modified state once, persist it, and log the modifications.
 
@@ -403,7 +405,9 @@ class PlanningOrchestrator:
         prev_kpis = self._store.load_kpis(business_date)
         existing_scenarios = self._store.load_scenarios(business_date)
 
-        schedule = SchedulingSolver(options).solve(transformed, policy)
+        schedule = SchedulingSolver(options).solve(
+            transformed, policy, weights, warm_start=warm_start
+        )
         kpis = self._analytics.compute(transformed, schedule)
         risks = self._risk.detect(transformed, schedule, kpis)
         recommendations = self._recommendation.recommend(transformed, schedule, risks)
@@ -467,6 +471,7 @@ class PlanningOrchestrator:
         business_date: str,
         scenario_type: ScenarioType,
         options: SolverOptions | None = None,
+        record_modification: bool = False,
     ) -> PlanningResult:
         """Commit a scenario's plan as the current plan for ``business_date``.
 
@@ -476,8 +481,17 @@ class PlanningOrchestrator:
         downstream artifacts (risks, deliveries, recommendations) are recomputed
         against that fixed schedule. Falls back to solving once if no saved
         scenario schedule exists (e.g. a legacy day).
+
+        When ``record_modification`` is True the commit is written to the day's
+        modification log (as an ``APPLY_SCENARIO`` entry with before/after KPIs)
+        so the Current Plan tab reflects it and it can be undone/reverted like
+        any other change. Used by the autonomous optimiser.
         """
         options = options or self._default_options
+        # Capture the pre-commit modification log + KPIs before anything is saved
+        # so an optional modification entry can record the correct before/after.
+        prev_mods = self._store.load_modifications(business_date)
+        prev_kpis = self._store.load_kpis(business_date)
         spec = next(
             (
                 s
@@ -557,7 +571,83 @@ class PlanningOrchestrator:
             scenario_comparison=scenario_comparison,
         )
         self._store.save(result, context, summary)
+        if record_modification:
+            if prev_mods is not None:
+                baseline = prev_mods.baseline_kpis
+                existing_entries = list(prev_mods.modifications)
+            elif prev_kpis is not None:
+                baseline = extract_scenario_kpis(prev_kpis)
+                existing_entries = []
+            else:
+                baseline = extract_scenario_kpis(kpis)
+                existing_entries = []
+            # A scenario commit replaces the whole plan, so it supersedes any
+            # earlier modifications: record it as the single active change.
+            entry = PlanModification(
+                label=f"Agent committed the '{spec.definition.name}' plan",
+                action="APPLY_SCENARIO",
+                applied_at=datetime.now().isoformat(timespec="seconds"),
+                targets={"scenario_type": [scenario_type.value]},
+            )
+            self._store.save_modifications(
+                PlanModifications(
+                    business_date=business_date,
+                    baseline_kpis=baseline,
+                    current_kpis=extract_scenario_kpis(kpis),
+                    modifications=[entry],
+                )
+            )
+            _ = existing_entries  # superseded by the whole-plan commit
         return result
+
+    def apply_planning_goal(
+        self,
+        business_date: str,
+        weights: ObjectiveWeights,
+        goal: str,
+        strategy: str = "",
+        options: SolverOptions | None = None,
+    ) -> PlanningResult:
+        """Re-solve the day under an LLM-derived objective and commit the result.
+
+        ``weights`` is a validated objective term -> weight map produced by the
+        planning-goal advisor from the planner's natural-language ``goal``. The
+        solver -- not the LLM -- produces the schedule, so all feasibility and
+        determinism guarantees hold; the LLM only chose the objective emphasis.
+        The result is committed as a modified CURRENT_PLAN (the Scenarios tab's
+        four what-ifs are preserved) and logged so the Current Plan tab shows the
+        goal that shaped it.
+        """
+        options = options or self._default_options
+        state = self._loader.load(business_date)
+        policy = self._rules.evaluate(state)
+        label = f"Optimised for goal: {goal.strip()}"
+        if strategy:
+            label += f" ({strategy})"
+        entry = PlanModification(
+            label=label[:200],
+            action="LLM_PLANNING_GOAL",
+            applied_at=datetime.now().isoformat(timespec="seconds"),
+            targets={},
+        )
+        logger.info(
+            "Applying LLM planning goal for %s with weights %s.",
+            business_date,
+            weights,
+        )
+        # Warm-start from the day's committed schedule: it is always feasible for
+        # the same (untransformed) state, so the re-solve can only improve on it
+        # under the new objective and never returns a pathological plan.
+        warm_start = self._store.load_schedule(business_date)
+        return self._finalize_replan(
+            business_date,
+            state,
+            policy,
+            options,
+            [entry],
+            weights=weights,
+            warm_start=warm_start,
+        )
 
     def _apply_priority_changes(
         self,
@@ -660,17 +750,24 @@ class PlanningOrchestrator:
     def auto_remediate(
         self,
         business_date: str,
-        priority_max: int = 1,
+        priority_max: int = 9,
         notify: bool = False,
         options: SolverOptions | None = None,
     ) -> dict:
-        """Autonomously re-plan when top-priority orders are running late.
+        """Autonomously re-plan every prioritised order that is running late.
 
-        Inspects the committed plan and finds orders whose *display* priority is
-        at most ``priority_max`` (0 = most urgent) that finish late, raises them
-        to top priority and re-plans once — a reversible action recorded in the
+        Inspects the committed plan and finds *all* late orders whose *display*
+        priority is at most ``priority_max`` (0 = most urgent). It then raises
+        the whole set in a single consolidated re-plan so as many as possible
+        finish on time: the most urgent late orders are boosted to the top
+        priority band and the rest are graduated just below them, preserving
+        relative urgency. This is one reversible action recorded in the
         modification log. Optionally emails a risk + replan summary. Returns a
         summary and is a safe no-op when nothing needs doing.
+
+        The default window spans every prioritised order, so a single run
+        remediates all the critical late orders together rather than only the
+        top one or two.
         """
         from app.analytics.kpis import aggregate_schedule
 
@@ -688,16 +785,16 @@ class PlanningOrchestrator:
         # Display priority = 10 - raw (0 = most urgent), so display <= max means
         # raw >= (10 - max).
         threshold_raw = 10 - max(0, min(9, priority_max))
-        critical = sorted(
-            o.order_id
+        late = [
+            o
             for o in aggregates.order_outcomes
             if not o.on_time and o.priority >= threshold_raw
-        )
+        ]
         before_otd = kpis.on_time_delivery_rate
 
-        if not critical:
+        if not late:
             logger.info(
-                "Auto-remediate %s: no top-priority late orders.", business_date
+                "Auto-remediate %s: no prioritised late orders.", business_date
             )
             return {
                 "triggered": False,
@@ -706,18 +803,23 @@ class PlanningOrchestrator:
                 "before_otd": before_otd,
             }
 
+        # Rank the late orders by urgency (higher raw priority first, then more
+        # late first) and give them graduated target priorities so the solver
+        # can distinguish the whole set while keeping every one of them above
+        # ordinary orders. All of them are re-planned together in one pass.
+        ranked = sorted(
+            late, key=lambda o: (o.priority, o.tardiness_minutes), reverse=True
+        )
+        new_levels = {o.order_id: max(6, 10 - i) for i, o in enumerate(ranked)}
+        critical = sorted(new_levels)
+
         logger.info(
-            "Auto-remediate %s: %d high-priority late order(s) %s — re-planning.",
+            "Auto-remediate %s: %d prioritised late order(s) %s — re-planning.",
             business_date,
             len(critical),
             critical,
         )
-        result = self.apply_order_priority(
-            business_date,
-            critical,
-            priority=10,
-            options=options,
-        )
+        result = self._apply_priority_changes(business_date, new_levels, options)
         summary = {
             "triggered": True,
             "critical_orders": critical,
@@ -790,12 +892,14 @@ class PlanningOrchestrator:
         quantity: int | None = None,
         reason: str = "",
         mode: str = "manual",
+        notify: bool = True,
     ) -> dict:
         """Place a purchase order for a material, email it, and log it for the day.
 
         Returns the recorded purchase order. ``mode`` marks whether it was placed
         by a human ("manual") or the agent ("auto"). Quantity defaults to the
-        shortage (rounded up) when not given.
+        shortage (rounded up) when not given. ``notify=False`` skips the per-PO
+        email (used by batch auto-reorder, which sends a single digest instead).
         """
         report = build_materials_report(self._loader.load(business_date))
         line = next((ln for ln in report.lines if ln.product_id == product_id), None)
@@ -810,7 +914,7 @@ class PlanningOrchestrator:
             qty = max(1, int(math.ceil(line.shortage or line.reorder_point or 1)))
 
         item = f"{product_id} ({line.name})" if line.name else product_id
-        email_status = self._send_po_email(item, qty, reason)
+        email_status = self._send_po_email(item, qty, reason) if notify else "batched"
         po = {
             "product_id": product_id,
             "name": line.name,
@@ -831,23 +935,35 @@ class PlanningOrchestrator:
         )
         return po
 
-    def auto_reorder(self, business_date: str) -> dict:
+    def auto_reorder(self, business_date: str, notify: bool = True) -> dict:
         """Autonomously place POs for materials below safety or reorder level.
 
         De-duplicates against orders already placed for the day (so it runs at
-        most once per material per day), and returns a summary. Safe no-op when
-        nothing qualifies.
+        most once per material per day). Prioritises below-safety items (then
+        largest shortage) and caps the run at ``auto_reorder_max_per_run`` to
+        avoid a PO/email flood on a large catalog. Sends ONE digest email for
+        the whole batch rather than one email per PO (``notify=False`` skips it
+        so the caller can fold the result into a single combined message). Safe
+        no-op when nothing qualifies.
         """
         report = build_materials_report(self._loader.load(business_date))
         already = {po["product_id"] for po in self._store.load_purchase_orders(business_date)}
+
+        candidates = [
+            line
+            for line in report.lines
+            if (line.below_safety or line.below_reorder) and line.product_id not in already
+        ]
+        # Most urgent first: below-safety, then largest shortage.
+        candidates.sort(
+            key=lambda ln: (not ln.below_safety, -(ln.shortage or 0.0))
+        )
+        cap = max(0, get_settings().auto_reorder_max_per_run)
+        selected = candidates[:cap]
+        deferred = len(candidates) - len(selected)
+
         placed: list[dict] = []
-        skipped: list[str] = []
-        for line in report.lines:
-            if not (line.below_safety or line.below_reorder):
-                continue
-            if line.product_id in already:
-                skipped.append(line.product_id)
-                continue
+        for line in selected:
             reason = (
                 "Auto-reorder: below safety stock."
                 if line.below_safety
@@ -858,17 +974,186 @@ class PlanningOrchestrator:
                 line.product_id,
                 reason=reason,
                 mode="auto",
+                notify=False,
             )
             placed.append(po)
+
+        if placed and notify:
+            self._send_reorder_digest(business_date, placed, deferred)
+
         logger.info(
-            "Auto-reorder %s: placed %d, skipped %d already ordered.",
+            "Auto-reorder %s: placed %d (deferred %d over cap), %d already ordered.",
             business_date,
             len(placed),
-            len(skipped),
+            deferred,
+            len(already),
         )
-        return {"placed": placed, "skipped_existing": skipped, "count": len(placed)}
+        return {
+            "placed": placed,
+            "count": len(placed),
+            "deferred_over_cap": deferred,
+        }
+
+    def _send_reorder_digest(
+        self, business_date: str, placed: list[dict], deferred: int
+    ) -> str:
+        """Email a single digest summarising a batch of auto-placed POs."""
+        try:
+            from app.notifications import EmailService
+
+            rows = "".join(
+                f"<li>{po.get('name') or po['product_id']} "
+                f"(x{po['quantity']:,})</li>"
+                for po in placed
+            )
+            more = (
+                f"<p>{deferred} further item(s) were below reorder level but "
+                f"deferred by the per-run cap; they will be reconsidered on the "
+                f"next cycle.</p>"
+                if deferred
+                else ""
+            )
+            subject = (
+                f"[PPO] Auto-reorder — {len(placed)} purchase order(s) placed "
+                f"for {business_date}"
+            )
+            html = (
+                f"<p>The agent placed {len(placed)} purchase order(s) for "
+                f"materials at/below their safety or reorder level on "
+                f"{business_date}:</p><ul>{rows}</ul>{more}"
+            )
+            text = f"{len(placed)} purchase order(s) placed for {business_date}."
+            EmailService().send_html(subject, html, text_body=text)
+            return "sent"
+        except Exception:  # noqa: BLE001 - notifications must never break planning
+            logger.exception("Auto-reorder digest email failed for %s.", business_date)
+            return "error"
 
     # -- Autonomous plan optimisation --------------------------------------
+    # Severity weights used to score a risk report: a single critical risk
+    # outweighs many low ones, so the agent always prefers the plan that clears
+    # the most severe risks first.
+    _RISK_WEIGHTS = {"CRITICAL": 100.0, "HIGH": 10.0, "MEDIUM": 2.0, "LOW": 1.0}
+
+    @classmethod
+    def _score_risks(cls, risks: RiskReport) -> tuple[float, int, int]:
+        """Return (weighted score, total count, critical+high count) for a report."""
+        score = 0.0
+        crit_high = 0
+        for r in risks.risks:
+            sev = str(r.severity)
+            score += cls._RISK_WEIGHTS.get(sev, 1.0)
+            if sev in ("CRITICAL", "HIGH"):
+                crit_high += 1
+        return score, len(risks.risks), crit_high
+
+    def _evaluate_scenario_risk(
+        self, business_date: str, spec, state
+    ) -> tuple[float, int, int, float, float] | None:
+        """Score a what-if scenario's risk profile without committing it.
+
+        Reuses the scenario's morning-computed schedule (no re-solve) and runs
+        the same analytics + risk detection the commit path would, so the score
+        reflects exactly what the plan would look like if applied. Returns
+        (risk_score, risk_count, critical_high_count, otd, cost) or ``None`` when
+        the scenario has no saved schedule.
+        """
+        scenario_type = spec.definition.scenario_type
+        saved = self._store.load_scenario_schedule(business_date, scenario_type)
+        if saved is None:
+            return None
+        transformed = spec.transform(
+            state.model_copy(deep=True), spec.definition.parameters
+        )
+        kpis = self._analytics.compute(transformed, saved)
+        risks = self._risk.detect(transformed, saved, kpis)
+        score, count, crit_high = self._score_risks(risks)
+        otd = kpis.on_time_delivery_rate or 0.0
+        cost = float(kpis.metrics.get("cost_total", 0.0) or 0.0)
+        return score, count, crit_high, otd, cost
+
+    def auto_optimize_plan(self, business_date: str) -> dict:
+        """Commit the what-if plan that delivers the best *outcome*, not just the
+        fewest risk flags.
+
+        Ranks the committed plan and every what-if by genuine business value —
+        highest on-time delivery, then lowest cost, then fewest risks as a final
+        tie-break — and commits the best when it beats the current plan. Judging
+        by outcome (rather than raw risk count) is deliberate: all what-ifs often
+        tie on delivery, and a plain risk-flag count is skewed by un-actionable
+        material risks and by capacity plans being penalised for running their
+        *added* machines hot. So the winner reflects the day's real bottleneck
+        and legitimately varies (overtime some days, extra shift others) instead
+        of always defaulting to one lever. Safe no-op when nothing is better.
+        """
+        schedule = self._store.load_schedule(business_date)
+        kpis = self._store.load_kpis(business_date)
+        if schedule is None or kpis is None:
+            return {"optimized": False, "reason": "no plan"}
+
+        state = self._loader.load(business_date)
+        current_risks = self._store.load_risks(business_date)
+        if current_risks is None:
+            current_risks = self._risk.detect(state, schedule, kpis)
+        cur_score, cur_count, cur_crit_high = self._score_risks(current_risks)
+        cur_otd = kpis.on_time_delivery_rate or 0.0
+        cur_cost = float(kpis.metrics.get("cost_total", 0.0) or 0.0)
+
+        # Rank by outcome: prefer higher on-time delivery, then lower cost, then
+        # fewer risks. Never accept a plan that lowers on-time delivery.
+        cur_key = (-cur_otd, cur_cost, cur_score)
+        best: tuple[float, float, float, ScenarioType, int, int] | None = None
+        best_key: tuple[float, float, float] | None = None
+        for spec in DEFAULT_SCENARIOS:
+            scenario_type = spec.definition.scenario_type
+            if scenario_type == ScenarioType.CURRENT_PLAN:
+                continue
+            evaluated = self._evaluate_scenario_risk(business_date, spec, state)
+            if evaluated is None:
+                continue
+            score, count, crit_high, otd, cost = evaluated
+            if otd < cur_otd - 1e-9:
+                continue  # never trade away on-time delivery
+            key = (-otd, cost, score)
+            if best_key is None or key < best_key:
+                best_key = key
+                best = (otd, cost, score, scenario_type, count, crit_high)
+
+        if best is None or best_key is None or best_key >= cur_key:
+            return {
+                "optimized": False,
+                "reason": "no better plan",
+                "risk_count_before": cur_count,
+                "risk_score_before": round(cur_score, 1),
+            }
+
+        otd, cost, score, scenario_type, count, crit_high = best
+        self.apply_scenario(business_date, scenario_type, record_modification=True)
+        logger.info(
+            "Auto-optimize %s: committed '%s' (best value: OTD %.1f%%->%.1f%%, "
+            "cost %.0f->%.0f, risks %d->%d).",
+            business_date,
+            scenario_type.value,
+            cur_otd * 100,
+            otd * 100,
+            cur_cost,
+            cost,
+            cur_count,
+            count,
+        )
+        return {
+            "optimized": True,
+            "scenario": str(scenario_type.value),
+            "risk_count_before": cur_count,
+            "risk_count_after": count,
+            "critical_high_before": cur_crit_high,
+            "critical_high_after": crit_high,
+            "otd_before": cur_otd,
+            "otd_after": otd,
+            "cost_before": cur_cost,
+            "cost_after": cost,
+        }
+
     def auto_commit_best(
         self,
         business_date: str,
@@ -1017,10 +1302,22 @@ class PlanningOrchestrator:
             makespan = kpis.metrics.get("makespan_minutes") if kpis else None
 
             did: list[str] = []
+            opt = actions.get("optimize") or {}
+            if opt.get("optimized"):
+                ob = opt.get("cost_before")
+                oa = opt.get("cost_after")
+                span = (
+                    f" (cost ${ob:,.0f} → ${oa:,.0f})"
+                    if isinstance(ob, (int, float)) and isinstance(oa, (int, float))
+                    else ""
+                )
+                did.append(
+                    f"committed the best-value '{opt.get('scenario')}' plan{span}"
+                )
             rem = actions.get("remediate") or {}
             if rem.get("triggered"):
                 did.append(
-                    f"prioritised {len(rem.get('critical_orders', []))} high-priority late order(s)"
+                    f"prioritised {len(rem.get('critical_orders', []))} late order(s)"
                 )
             reo = actions.get("reorder") or {}
             if reo.get("count"):
@@ -1047,6 +1344,44 @@ class PlanningOrchestrator:
                 if did
                 else "<p>No autonomous changes were needed.</p>"
             )
+
+            # Detail sections fold in what used to be separate emails, so this
+            # single briefing is the one combined notification for the run.
+            details: list[str] = []
+            placed = reo.get("placed") or []
+            if placed:
+                po_items = "".join(
+                    f"<li>{po.get('name') or po['product_id']} (x{po['quantity']:,})</li>"
+                    for po in placed
+                )
+                deferred = reo.get("deferred_over_cap") or 0
+                extra = (
+                    f"<p style='color:#888'>{deferred} more below reorder — deferred to "
+                    f"the next cycle by the per-run cap.</p>"
+                    if deferred
+                    else ""
+                )
+                details.append(
+                    f"<p><b>Purchase orders placed ({len(placed)}):</b></p>"
+                    f"<ul>{po_items}</ul>{extra}"
+                )
+            fixes = rc.get("fixes") or []
+            if fixes:
+                fix_items = "".join(f"<li>{lbl}</li>" for lbl in fixes)
+                details.append(
+                    f"<p><b>Conflicts resolved ({len(fixes)}):</b></p><ul>{fix_items}</ul>"
+                )
+            esc_orders = esc.get("orders") or []
+            if esc_orders:
+                esc_items = "".join(
+                    f"<li>{o['order_id']}: {o['days_late']} days late (due {o['due_date']})</li>"
+                    for o in esc_orders
+                )
+                details.append(
+                    f"<p style='color:#c0392b'><b>⚠ Escalated — severely late "
+                    f"({esc.get('count')}):</b></p><ul>{esc_items}</ul>"
+                )
+            details_html = "".join(details)
             alert_html = (
                 f"<p style='color:#c0392b'><b>⚠ Risk alert:</b> {critical} critical/high "
                 f"risks (threshold {settings.briefing_critical_risk_threshold}).</p>"
@@ -1060,6 +1395,7 @@ class PlanningOrchestrator:
                 f"<b>Makespan:</b> {(f'{makespan/1440:.1f} d') if isinstance(makespan,(int,float)) else 'n/a'}</p>"
                 f"{alert_html}"
                 f"<p><b>What the agent did overnight:</b></p>{did_html}"
+                f"{details_html}"
                 f"<p style='color:#888'>Automated briefing from the Production Planning Agent.</p>"
             )
             EmailService().send_html(
@@ -1084,12 +1420,14 @@ class PlanningOrchestrator:
             logger.exception("Summary email failed: %s", subject)
             return False
 
-    def resolve_conflicts(self, business_date: str) -> dict:
+    def resolve_conflicts(self, business_date: str, notify: bool = True) -> dict:
         """Auto-resolve simple conflicts and email the supervisor a summary.
 
         Applies feasible reassign-worker / reschedule-maintenance fixes for any
         worker- or maintenance-conflict risks (one combined re-solve, logged and
         reversible), then emails a summary of actions to the supervisor.
+        ``notify=False`` skips the standalone email so the caller can fold the
+        result into a single combined message.
         """
         risks = self._store.load_risks(business_date)
         recs = self._store.load_recommendations(business_date)
@@ -1134,13 +1472,20 @@ class PlanningOrchestrator:
             f"and re-planned the day:</p><ul>{items}</ul>"
             f"<p style='color:#888'>Reversible actions recorded in the Current Plan log.</p>"
         )
-        emailed = self._send_summary_email(
-            f"[PPO] Conflicts auto-resolved — {business_date}", html, to=to
-        )
+        emailed = False
+        if notify:
+            emailed = self._send_summary_email(
+                f"[PPO] Conflicts auto-resolved — {business_date}", html, to=to
+            )
         logger.info(
             "Auto-resolve conflicts %s: applied %d fix(es).", business_date, len(actions)
         )
-        return {"resolved": True, "count": len(actions), "emailed": emailed}
+        return {
+            "resolved": True,
+            "count": len(actions),
+            "emailed": emailed,
+            "fixes": labels,
+        }
 
     def overtime_on_risk(self, business_date: str, threshold: int | None = None) -> dict:
         """Apply the Overtime plan when delivery risk is high and it improves OTD."""
@@ -1180,8 +1525,12 @@ class PlanningOrchestrator:
             }
         return {"applied": False, "reason": "overtime not better", "at_risk": at_risk}
 
-    def check_escalation(self, business_date: str) -> dict:
-        """Escalate by email when orders are projected late beyond the threshold."""
+    def check_escalation(self, business_date: str, notify: bool = True) -> dict:
+        """Escalate by email when orders are projected late beyond the threshold.
+
+        ``notify=False`` skips the standalone email so the caller can fold the
+        escalation into a single combined message.
+        """
         s = get_settings()
         schedule = self._store.load_schedule(business_date)
         if schedule is None:
@@ -1197,10 +1546,17 @@ class PlanningOrchestrator:
         if len(late) < max(1, s.escalation_min_orders):
             return {"escalated": False, "count": len(late)}
         to = s.escalation_email or s.supervisor_email or s.alert_email_to
-        items = "".join(
-            f"<li>{ln.order_id}: {ln.tardiness_minutes / 1440:.1f} days late "
-            f"(due {ln.due_date})</li>"
+        late_orders = [
+            {
+                "order_id": ln.order_id,
+                "days_late": round(ln.tardiness_minutes / 1440, 1),
+                "due_date": ln.due_date,
+            }
             for ln in late[:20]
+        ]
+        items = "".join(
+            f"<li>{o['order_id']}: {o['days_late']} days late (due {o['due_date']})</li>"
+            for o in late_orders
         )
         html = (
             f"<h3 style='color:#c0392b'>\u26a0 Delivery escalation — {business_date}</h3>"
@@ -1208,13 +1564,15 @@ class PlanningOrchestrator:
             f"\u2265 {s.escalation_lateness_days} days:</p><ul>{items}</ul>"
             f"<p style='color:#888'>Automated escalation from the Production Planning Agent.</p>"
         )
-        emailed = self._send_summary_email(
-            f"[PPO] ESCALATION: {len(late)} order(s) severely late — {business_date}",
-            html,
-            to=to,
-        )
+        emailed = False
+        if notify:
+            emailed = self._send_summary_email(
+                f"[PPO] ESCALATION: {len(late)} order(s) severely late — {business_date}",
+                html,
+                to=to,
+            )
         logger.info("Escalation %s: %d order(s) >= %d days late.", business_date, len(late), s.escalation_lateness_days)
-        return {"escalated": True, "count": len(late), "emailed": emailed}
+        return {"escalated": True, "count": len(late), "emailed": emailed, "orders": late_orders}
 
     def run_autonomy(self, business_date: str, respect_flags: bool = True) -> dict:
         """Run the autonomous action bundle for a day and return a combined summary.
@@ -1223,10 +1581,10 @@ class PlanningOrchestrator:
         1. reorder low materials (orthogonal to the schedule);
         2. pick the plan — only the first that applies changes the committed plan:
            a. resolve simple conflicts (correctness first);
-           b. auto-commit the best what-if if it clears the thresholds;
-           c. enable overtime when delivery risk is high and it improves OTD;
-           d. prioritise high-priority late orders;
-           e. relieve a machine bottleneck;
+           b. commit the lowest-risk what-if plan (clears capacity, machine-
+              overload and delivery risks in one re-plan);
+           c. prioritise high-priority late orders (fallback when no what-if is
+              better);
         3. escalate severely late orders by email (orthogonal notification);
         4. email a daily briefing summarising everything.
 
@@ -1238,36 +1596,43 @@ class PlanningOrchestrator:
         summary: dict = {}
 
         if not respect_flags or s.auto_reorder_enabled:
-            summary["reorder"] = self.auto_reorder(business_date)
+            summary["reorder"] = self.auto_reorder(business_date, notify=False)
 
         plan_changed = False
         if not respect_flags or s.auto_resolve_conflicts_enabled:
-            rc = self.resolve_conflicts(business_date)
+            rc = self.resolve_conflicts(business_date, notify=False)
             summary["conflicts"] = rc
             plan_changed = bool(rc.get("resolved"))
+        # Risk-minimising plan selection supersedes the old commit-best / overtime
+        # / rebalance trio: it evaluates every what-if by its resulting risk
+        # profile and commits the best, so it fires even when on-time delivery is
+        # already 100% but capacity/overload risks remain.
         if not plan_changed and (not respect_flags or s.auto_commit_best_enabled):
-            cb = self.auto_commit_best(business_date)
-            summary["commit_best"] = cb
-            plan_changed = bool(cb.get("committed"))
-        if not plan_changed and (not respect_flags or s.auto_overtime_on_risk_enabled):
-            ot = self.overtime_on_risk(business_date)
-            summary["overtime"] = ot
-            plan_changed = bool(ot.get("applied"))
+            opt = self.auto_optimize_plan(business_date)
+            summary["optimize"] = opt
+            plan_changed = bool(opt.get("optimized"))
         if not plan_changed and (not respect_flags or s.auto_replan_enabled):
             rem = self.auto_remediate(
                 business_date, priority_max=s.auto_replan_priority_max, notify=False
             )
             summary["remediate"] = rem
             plan_changed = bool(rem.get("triggered"))
-        if not plan_changed and (not respect_flags or s.auto_rebalance_enabled):
-            rb = self.auto_rebalance(business_date)
-            summary["rebalance"] = rb
-            plan_changed = bool(rb.get("rebalanced"))
 
         if not respect_flags or s.auto_escalation_enabled:
-            summary["escalation"] = self.check_escalation(business_date)
+            summary["escalation"] = self.check_escalation(business_date, notify=False)
 
-        if not respect_flags or s.auto_briefing_enabled:
+        # Single consolidated notification: every sub-step above ran with its own
+        # email suppressed, so the run emits ONE combined briefing covering the
+        # reorder, conflicts, plan change and escalation. Sent whenever the run
+        # actually did something (or briefing is explicitly enabled), so a
+        # suppressed sub-email is never silently lost.
+        did_work = (
+            bool((summary.get("reorder") or {}).get("count"))
+            or bool((summary.get("conflicts") or {}).get("resolved"))
+            or plan_changed
+            or bool((summary.get("escalation") or {}).get("escalated"))
+        )
+        if not respect_flags or s.auto_briefing_enabled or did_work:
             summary["briefing_sent"] = self.send_morning_briefing(business_date, summary)
 
         self._record_autonomy_activity(business_date, summary)
@@ -1310,7 +1675,17 @@ class PlanningOrchestrator:
         reo = summary.get("reorder") or {}
         if reo.get("count"):
             placed = reo.get("placed") or []
-            listing = f": {', '.join(placed[:6])}" if placed else ""
+
+            def _po_label(po: object) -> str:
+                if isinstance(po, dict):
+                    pid = po.get("product_id") or po.get("material_id") or "?"
+                    qty = po.get("quantity")
+                    return f"{pid} x{qty}" if qty is not None else str(pid)
+                return str(po)
+
+            listing = (
+                f": {', '.join(_po_label(p) for p in placed[:6])}" if placed else ""
+            )
             add(
                 "reorder",
                 "Reordered low materials",
@@ -1328,6 +1703,27 @@ class PlanningOrchestrator:
                 reversible=True,
                 emailed=bool(rc.get("emailed")),
                 trigger="Worker / maintenance conflicts detected",
+            )
+
+        opt = summary.get("optimize") or {}
+        if opt.get("optimized"):
+            before = opt.get("risk_count_before")
+            after = opt.get("risk_count_after")
+            cb0 = opt.get("cost_before")
+            ca0 = opt.get("cost_after")
+            impact = None
+            if isinstance(cb0, (int, float)) and isinstance(ca0, (int, float)):
+                impact = f"Cost ${cb0:,.0f} → ${ca0:,.0f}"
+                if isinstance(before, int) and isinstance(after, int):
+                    impact += f" (risks {before} → {after})"
+            add(
+                "optimize",
+                "Committed the best-value plan",
+                f"Switched to the '{opt.get('scenario')}' plan (best on-time "
+                f"delivery at the lowest cost)",
+                reversible=True,
+                impact=impact,
+                trigger="A what-if plan improved delivery/cost without lowering on-time delivery",
             )
 
         cb = summary.get("commit_best") or {}
@@ -1373,11 +1769,11 @@ class PlanningOrchestrator:
             add(
                 "remediate",
                 "Prioritised late orders",
-                f"Prioritised {len(orders)} high-priority late order(s){listing}",
+                f"Prioritised {len(orders)} late order(s){listing}",
                 reversible=True,
                 emailed=bool(rem.get("emailed")),
                 impact=impact,
-                trigger="High-priority orders were running late",
+                trigger="Prioritised orders were running late",
             )
 
         rb = summary.get("rebalance") or {}
@@ -1445,32 +1841,18 @@ class PlanningOrchestrator:
                 s.auto_resolve_conflicts_enabled,
             ),
             (
-                "commit",
-                "Commit the best plan",
-                f"Runs when a what-if plan lifts on-time delivery by at least "
-                f"{s.auto_commit_min_otd_gain * 100:.0f}% within a "
-                f"{s.auto_commit_max_cost_increase:,.0f} cost limit.",
+                "optimize",
+                "Commit the lowest-risk plan",
+                "Runs when a what-if plan cuts overall risk without lowering "
+                "on-time delivery.",
                 s.auto_commit_best_enabled,
-            ),
-            (
-                "overtime",
-                "Enable overtime",
-                f"Runs when at-risk orders reach {s.overtime_risk_threshold}.",
-                s.auto_overtime_on_risk_enabled,
             ),
             (
                 "remediate",
                 "Prioritise late orders",
-                "Runs when high-priority orders are running late.",
+                "Runs when prioritised orders are running late and no what-if "
+                "plan is better.",
                 s.auto_replan_enabled,
-            ),
-            (
-                "rebalance",
-                "Re-balance a bottleneck",
-                f"Runs when a machine tops "
-                f"{s.auto_rebalance_util_threshold * 100:.0f}% utilization while "
-                f"another sits under {s.auto_rebalance_alt_util_max * 100:.0f}%.",
-                s.auto_rebalance_enabled,
             ),
             (
                 "escalation",
@@ -1661,6 +2043,27 @@ class PlanningOrchestrator:
                     for o in state.production_orders
                 ]
             return state
+        if modification.action == "APPLY_SCENARIO":
+            # A committed what-if plan: re-apply its deterministic transform so a
+            # cumulative rebuild reproduces the same plan shape.
+            values = modification.targets.get("scenario_type", [])
+            if not values:
+                return state
+            try:
+                scenario_type = ScenarioType(values[0])
+            except ValueError:
+                return state
+            spec = next(
+                (
+                    s
+                    for s in DEFAULT_SCENARIOS
+                    if s.definition.scenario_type == scenario_type
+                ),
+                None,
+            )
+            if spec is None:
+                return state
+            return spec.transform(state, spec.definition.parameters)
         try:
             rec_action = RecommendationAction(modification.action)
         except ValueError:

@@ -73,7 +73,7 @@ def _build_machines(config: SimulatorConfig) -> list[Machine]:
 def _build_products(config: SimulatorConfig) -> tuple[list[Product], list[Product]]:
     """Return ``(finished_goods, raw_materials)`` product lists."""
     finished: list[Product] = []
-    for i in range(config.num_finished_products):
+    for i in range(config.eff_num_finished_products):
         pid = f"FG-{i + 1:04d}"
         finished.append(
             Product(
@@ -86,7 +86,7 @@ def _build_products(config: SimulatorConfig) -> tuple[list[Product], list[Produc
             )
         )
     raw: list[Product] = []
-    for i in range(config.num_raw_materials):
+    for i in range(config.eff_num_raw_materials):
         pid = f"RM-{i + 1:04d}"
         raw.append(
             Product(
@@ -200,7 +200,7 @@ def _build_workforce(
 def _build_customers(config: SimulatorConfig, rng: Random) -> list[Customer]:
     tiers = list(CustomerTier)
     customers: list[Customer] = []
-    for i in range(config.num_customers):
+    for i in range(config.eff_num_customers):
         tier = rng.choice(tiers)
         customers.append(
             Customer(
@@ -219,7 +219,7 @@ def _build_suppliers(
 ) -> tuple[list[Supplier], dict[str, str]]:
     """Return suppliers and a mapping of ``product_id -> supplier_id``."""
     suppliers: list[Supplier] = []
-    for i in range(config.num_suppliers):
+    for i in range(config.eff_num_suppliers):
         suppliers.append(
             Supplier(
                 supplier_id=f"SP-{i + 1:04d}",
@@ -278,7 +278,7 @@ def _build_purchase_orders(
 ) -> list[PurchaseOrder]:
     supplier_by_id = {supplier.supplier_id: supplier for supplier in suppliers}
     purchase_orders: list[PurchaseOrder] = []
-    for i in range(config.initial_open_purchase_orders):
+    for i in range(config.eff_initial_open_purchase_orders):
         material = rng.choice(raw)
         supplier_id = supplier_for_material[material.product_id]
         lead = supplier_by_id[supplier_id].lead_time_days

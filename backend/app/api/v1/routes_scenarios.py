@@ -5,9 +5,22 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
-from app.api.v1.deps import get_orchestrator, get_results_store
-from app.api.v1.schemas import ApplyScenarioRequest
+from app.advisor import (
+    PlanningGoalAdvisor,
+    ScenarioAdvisor,
+    ScenarioRecommendation,
+    WeightProposal,
+)
+from app.advisor.outcome import build_goal_outcome
+from app.api.v1.deps import (
+    get_goal_advisor,
+    get_orchestrator,
+    get_results_store,
+    get_scenario_advisor,
+)
+from app.api.v1.schemas import ApplyScenarioRequest, OptimizeGoalRequest
 from app.core.exceptions import NotFoundError, ValidationError
 from app.domain.enums import ScenarioType
 from app.domain.models.scenario import ScenarioComparison
@@ -100,3 +113,98 @@ async def apply_scenario(
         )
     result = orchestrator.apply_scenario(business_date, scenario_type, options)
     return result.schedule
+
+
+class OptimizeGoalResponse(BaseModel):
+    """Result of planning by a natural-language goal."""
+
+    proposal: WeightProposal
+    applied: bool
+    kpis: dict[str, float] | None = None
+    outcome: str | None = None
+
+
+@router.post(
+    "/{business_date}/optimize-goal",
+    response_model=OptimizeGoalResponse,
+    summary="Plan by a natural-language goal",
+)
+async def optimize_goal(
+    business_date: str,
+    request: OptimizeGoalRequest,
+    orchestrator: Annotated[PlanningOrchestrator, Depends(get_orchestrator)],
+    advisor: Annotated[PlanningGoalAdvisor, Depends(get_goal_advisor)],
+) -> OptimizeGoalResponse:
+    """Translate a planner's goal into an objective weighting and re-solve.
+
+    The LLM advisor only chooses *how to weight* a fixed set of objective terms;
+    the validated weighting is handed to the deterministic CP-SAT solver, which
+    produces the actual schedule. When ``apply`` is false the proposed weighting
+    is returned as a preview without committing a new plan.
+    """
+    proposal = advisor.propose_weights(request.goal)
+    # Only commit a re-plan when the assistant genuinely understood the goal and
+    # derived an objective from it. Greetings, off-topic text, an unmappable
+    # goal, or an unavailable assistant all return a conversational reply
+    # (proposal.usable is False) WITHOUT throwing a default plan at the user.
+    should_apply = request.apply and proposal.usable
+    if not should_apply:
+        return OptimizeGoalResponse(proposal=proposal, applied=False)
+
+    options = None
+    if request.max_time_seconds is not None:
+        options = SolverOptions.from_settings().model_copy(
+            update={"max_time_seconds": request.max_time_seconds}
+        )
+    result = orchestrator.apply_planning_goal(
+        business_date,
+        proposal.weights,
+        proposal.goal,
+        strategy=proposal.strategy,
+        options=options,
+    )
+    after = dict(result.kpis.metrics) | {
+        "on_time_delivery_rate": float(result.kpis.on_time_delivery_rate or 0.0),
+        "average_machine_utilization": float(
+            result.kpis.average_machine_utilization or 0.0
+        ),
+        "total_tardiness_minutes": float(result.kpis.total_tardiness_minutes or 0),
+    }
+    # Grounded outcome reasoning: did the goal's intent actually land, and if not,
+    # why (e.g. on-time delivery is capped by materials / due dates)? Compared
+    # against the day's fixed original plan and the scenario ceiling.
+    store = orchestrator.store
+    before = store.load_original_kpis(business_date) or {}
+    outcome = build_goal_outcome(
+        proposal.weights, before, after, store.load_scenarios(business_date)
+    )
+    return OptimizeGoalResponse(
+        proposal=proposal,
+        applied=True,
+        kpis=after,
+        outcome=outcome or None,
+    )
+
+
+@router.post(
+    "/{business_date}/recommend",
+    response_model=ScenarioRecommendation,
+    summary="Recommend which scenario to commit",
+)
+async def recommend_scenario(
+    business_date: str,
+    store: Annotated[ResultsStore, Depends(get_results_store)],
+    advisor: Annotated[ScenarioAdvisor, Depends(get_scenario_advisor)],
+) -> ScenarioRecommendation:
+    """Recommend the best scenario to commit, grounded on the solved comparison.
+
+    Read-only: it reasons over the persisted scenario KPIs/deltas and changes
+    nothing. Falls back to a deterministic pick when the assistant is offline.
+    """
+    scenarios = store.load_scenarios(business_date)
+    if scenarios is None:
+        raise NotFoundError(
+            f"No scenario comparison found for {business_date}; run the pipeline first.",
+            details={"business_date": business_date},
+        )
+    return advisor.recommend(scenarios)

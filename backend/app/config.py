@@ -70,6 +70,21 @@ class Settings(BaseSettings):
     datasets_dir: Path = BACKEND_DIR / "datasets"
     outputs_dir: Path = BACKEND_DIR / "outputs"
 
+    # --- Data persistence ---
+    # When True, daily factory snapshots are additionally stored in a single
+    # SQLite database (``datasets/factory.db``) which becomes the primary read
+    # source. CSV snapshots are still written and are used as an automatic
+    # fallback, so the existing flow is never disrupted. Set False for the
+    # legacy CSV-only behaviour.
+    sqlite_enabled: bool = True
+
+    # Master-data catalog scale for the simulator. 1.0 = the default tuned plant.
+    # Raising it grows the catalog (products, materials, customers, suppliers,
+    # POs, and derived inventory/BOMs/routings/operations) toward 500-1000+ rows
+    # while keeping the schedulable working set (orders/workers/machines) at its
+    # solver-healthy size. Applies to every snapshot generated from now on.
+    simulator_scale_factor: float = Field(default=1.0, gt=0)
+
     # --- Optimization solver defaults (used by the optimization phase) ---
     solver_max_time_seconds: float = 60.0
     solver_random_seed: int = 42
@@ -81,19 +96,27 @@ class Settings(BaseSettings):
     enable_scheduler: bool = True
 
     # --- Autonomous remediation ---
-    # When True, after a fresh daily plan the agent auto-detects top-priority
+    # When True, after a fresh daily plan the agent auto-detects prioritised
     # orders that are late and re-plans to prioritise them (a reversible, logged
     # action). ``auto_replan_priority_max`` is the highest display priority
-    # (0 = most urgent) that triggers it. ``auto_notify_email`` emails a
+    # (0 = most urgent) that triggers it; the default (9) spans every prioritised
+    # order so a single run remediates all the critical late orders together
+    # rather than only the top one or two. ``auto_notify_email`` emails a
     # risk + replan summary to ``alert_email_to`` when an auto-action runs.
     auto_replan_enabled: bool = False
-    auto_replan_priority_max: int = 1
+    auto_replan_priority_max: int = 9
     auto_notify_email: bool = False
 
     # When True, after a fresh daily plan the agent auto-places purchase orders
     # for materials below BOTH safety stock and reorder point (once per day per
     # material, de-duplicated against orders already placed that day).
     auto_reorder_enabled: bool = False
+
+    # Safety cap on how many purchase orders a single auto-reorder run may place
+    # (prioritised: below-safety first, then largest shortage). Prevents an email
+    # / PO flood when the catalog is large (e.g. hundreds of items below reorder).
+    # Auto-reorder sends ONE digest email per run, not one per PO.
+    auto_reorder_max_per_run: int = 20
 
     # Auto-commit the best what-if scenario when it clearly beats the committed
     # plan: on-time delivery improves by >= gain AND cost rises by <= increase.
@@ -163,6 +186,11 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         """Return ``True`` when running in the production environment."""
         return self.environment == "production"
+
+    @property
+    def factory_db_path(self) -> Path:
+        """Path to the single global SQLite snapshot database."""
+        return self.datasets_dir / "factory.db"
 
 
 @lru_cache

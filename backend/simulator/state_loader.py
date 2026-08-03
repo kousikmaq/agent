@@ -61,11 +61,22 @@ def _read_routings(directory: Path) -> list[Routing]:
 def load_state(business_date: str, datasets_dir: Path) -> FactoryState:
     """Load the :class:`FactoryState` snapshot for ``business_date``.
 
+    Reads from the global SQLite database first (when enabled) and falls back to
+    the CSV snapshot directory, so a day written by either path evolves cleanly.
+
     Raises
     ------
     DataIngestionError
-        If the dated snapshot directory does not exist.
+        If neither the database nor the snapshot directory has the date.
     """
+    from app.ingestion.sqlite_store import maybe_get_store
+
+    store = maybe_get_store(datasets_dir)
+    if store is not None:
+        state = store.load_state(business_date)
+        if state is not None:
+            return state
+
     directory = datasets_dir / business_date
     if not directory.exists():
         raise DataIngestionError(

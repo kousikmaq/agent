@@ -25,6 +25,12 @@ The scheduling itself is done by a mathematical optimizer, not by guesswork and 
 model. The same inputs always produce the same plan, which matters in a factory where people need to
 trust and repeat decisions.
 
+The picture below shows the main parts of the product at a glance: the factory data on the left, the
+engine that plans and checks the day in the middle (including the part that acts on its own), and the
+screens the team uses on the right.
+
+![How the product fits together](img/architecture.png)
+
 ---
 
 ## 2. The problem it solves
@@ -62,6 +68,11 @@ decision a clear reason.
 ---
 
 ## 4. Main use cases
+
+The picture below shows a normal day: the agent does a set of safe tasks on its own first, then hands a
+ready plan to the planner, who reviews what was done, adjusts anything they disagree with, and commits.
+
+![What the agent does on its own and what the planner does](img/user-workflow.png)
 
 1. **Build today's plan.** Load the factory state for a date and generate a full machine by machine,
    worker by worker schedule in one click.

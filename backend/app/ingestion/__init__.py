@@ -12,6 +12,13 @@ from app.ingestion.base import DataSource
 from app.ingestion.csv_source import CsvDataSource
 from app.ingestion.loader import FactoryStateLoader, load_factory_state
 from app.ingestion.snapshot import SnapshotManager
+from app.ingestion.sqlite_store import (
+    FactorySqliteStore,
+    SqliteDataSource,
+    build_data_source,
+    get_factory_store,
+    maybe_get_store,
+)
 from app.ingestion.validators import (
     ValidationIssue,
     ValidationResult,
@@ -22,6 +29,11 @@ from app.ingestion.validators import (
 __all__ = [
     "DataSource",
     "CsvDataSource",
+    "SqliteDataSource",
+    "FactorySqliteStore",
+    "build_data_source",
+    "get_factory_store",
+    "maybe_get_store",
     "FactoryStateLoader",
     "load_factory_state",
     "SnapshotManager",

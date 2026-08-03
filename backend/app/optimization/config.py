@@ -48,6 +48,27 @@ class SolverOptions(BaseModel):
         description="If the policy marks due dates HARD, enforce them as constraints.",
     )
 
+    # --- Lot splitting (parallel processing for prioritised orders) ---
+    # When on, an operation of a *prioritised* order (priority at/above the
+    # threshold) whose work centre has several eligible machines is split into
+    # parallel sub-lots that run on distinct machines at the same time, so the
+    # urgent order finishes sooner. Non-prioritised orders are unaffected.
+    enable_lot_splitting: bool = Field(
+        default=True,
+        description="Split prioritised orders across parallel machines to speed them up.",
+    )
+    lot_split_priority_threshold: int = Field(
+        default=8,
+        ge=1,
+        le=10,
+        description="Minimum order priority (1-10) that triggers parallel lot splitting.",
+    )
+    lot_split_max_parallel: int = Field(
+        default=3,
+        ge=2,
+        description="Max machines an operation may be split across simultaneously.",
+    )
+
     # --- Batch processing (parallel-batch machines: paint booth, QC chamber) ---
     enable_batching: bool = Field(
         default=True,

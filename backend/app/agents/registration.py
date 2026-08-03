@@ -28,7 +28,7 @@ from app.agents.service import MafOrchestrationService
 from app.agents.validation_agent import ValidationAgent
 from app.agents.workflow import AgentWorkflow
 from app.config import get_settings
-from app.ingestion import CsvDataSource, SnapshotManager
+from app.ingestion import SnapshotManager, build_data_source
 from app.optimization import SolverOptions
 from app.services import ResultsStore
 from simulator.config import SimulatorConfig
@@ -40,9 +40,12 @@ WORKFLOW_NAME = "daily_planning"
 def _build_data_agent(datasets_dir: Path) -> DataAgent:
     """Construct the Data Agent wired to the existing data services."""
     return DataAgent(
-        data_source=CsvDataSource(datasets_dir),
+        data_source=build_data_source(datasets_dir),
         snapshot=SnapshotManager(datasets_dir),
-        simulator=SimulatorEngine(config=SimulatorConfig(), datasets_dir=datasets_dir),
+        simulator=SimulatorEngine(
+            config=SimulatorConfig(scale_factor=get_settings().simulator_scale_factor),
+            datasets_dir=datasets_dir,
+        ),
         datasets_dir=datasets_dir,
     )
 

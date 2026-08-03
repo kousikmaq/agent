@@ -62,7 +62,8 @@ def _build_lifespan(settings: Settings):
                 datasets_dir=settings.datasets_dir, outputs_dir=settings.outputs_dir
             )
             simulator = SimulatorEngine(
-                config=SimulatorConfig(), datasets_dir=settings.datasets_dir
+                config=SimulatorConfig(scale_factor=settings.simulator_scale_factor),
+                datasets_dir=settings.datasets_dir,
             )
             scheduler = PlanningScheduler(
                 orchestrator, simulator, settings.datasets_dir

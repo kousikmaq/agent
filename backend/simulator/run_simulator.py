@@ -57,6 +57,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override the base RNG seed for reproducibility.",
     )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=None,
+        help="Catalog scale factor (overrides PPO_SIMULATOR_SCALE_FACTOR).",
+    )
     return parser.parse_args(argv)
 
 
@@ -76,7 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(settings)
 
     args = _parse_args(argv)
-    config = SimulatorConfig()
+    scale = args.scale if args.scale is not None else settings.simulator_scale_factor
+    config = SimulatorConfig(scale_factor=scale)
     if args.seed is not None:
         config = config.model_copy(update={"base_seed": args.seed})
 

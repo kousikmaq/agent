@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ScenarioComparison as Comparison } from "../../types/api";
+import type {
+  ScenarioComparison as Comparison,
+  OptimizeGoalResponse,
+  ScenarioRecommendation,
+} from "../../types/api";
 import { fmtCurrency, fmtMinutes, fmtPercent } from "../../utils/format";
 
 interface Props {
@@ -11,6 +15,13 @@ interface Props {
   committedType?: string | null;
   /** Notifies the parent which scenario is selected (for the email report). */
   onSelect?: (scenarioType: string) => void;
+  /** Plan by a natural-language goal: parent re-solves and reloads, returning
+   * the LLM's weighting + rationale for display. */
+  onOptimizeGoal?: (goal: string) => Promise<OptimizeGoalResponse | null>;
+  optimizingGoal?: boolean;
+  /** Ask the advisor which solved scenario to commit (read-only advice). */
+  onRecommend?: () => Promise<ScenarioRecommendation | null>;
+  recommending?: boolean;
 }
 
 const fmtCount = (v: number) => String(Math.round(v));
@@ -73,6 +84,16 @@ const APPROACH: Record<string, string> = {
     "Returns down machines to service as backups and clears breakdown maintenance to widen the usable machine pool.",
   ADDITIONAL_SHIFT:
     "Adds a parallel night-shift machine for each machine to increase capacity and parallelism.",
+};
+
+// Human-readable labels for the objective terms the AI goal-planner weights.
+const WEIGHT_LABELS: Record<string, string> = {
+  num_late: "On-time delivery",
+  total_tardiness: "Total lateness",
+  makespan: "Finish sooner",
+  total_flow: "Compactness",
+  max_machine_load: "Machine balance",
+  total_overtime: "Overtime (cost)",
 };
 
 function delta(comparison: Comparison, name: string, key: string): number | null {
@@ -182,6 +203,10 @@ export function ScenarioComparison({
   applying,
   committedType,
   onSelect,
+  onOptimizeGoal,
+  optimizingGoal,
+  onRecommend,
+  recommending,
 }: Props) {
   const baselineName =
     comparison.results.find((r) => r.is_baseline)?.name ?? null;
@@ -247,6 +272,56 @@ export function ScenarioComparison({
 
   const applyDisabled = applying !== null && applying !== undefined;
 
+  // --- AI planning panel state -------------------------------------------
+  const [goal, setGoal] = useState("");
+  const [proposal, setProposal] = useState<OptimizeGoalResponse["proposal"] | null>(
+    null
+  );
+  const [applied, setApplied] = useState(false);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [recommendation, setRecommendation] =
+    useState<ScenarioRecommendation | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // Reset transient AI results when the day changes.
+  useEffect(() => {
+    setProposal(null);
+    setApplied(false);
+    setOutcome(null);
+    setRecommendation(null);
+    setAiError(null);
+  }, [comparison.business_date]);
+
+  const recommendedName =
+    comparison.results.find((r) => r.scenario_type === recommendation?.recommended_type)
+      ?.name ?? null;
+
+  async function submitGoal() {
+    if (!onOptimizeGoal || !goal.trim() || optimizingGoal) return;
+    setAiError(null);
+    try {
+      const res = await onOptimizeGoal(goal.trim());
+      if (res) {
+        setProposal(res.proposal);
+        setApplied(res.applied);
+        setOutcome(res.outcome ?? null);
+      }
+    } catch {
+      setAiError("Could not plan for that goal. Please try again.");
+    }
+  }
+
+  async function askRecommendation() {
+    if (!onRecommend || recommending) return;
+    setAiError(null);
+    try {
+      const rec = await onRecommend();
+      if (rec) setRecommendation(rec);
+    } catch {
+      setAiError("Could not get a recommendation. Please try again.");
+    }
+  }
+
   return (
     <div className="scenario-panel">
       {committedName && (
@@ -268,6 +343,134 @@ export function ScenarioComparison({
         Four what-if plans solved against today's data. Pick a scenario to open
         its page, review the full breakdown, and choose the plan that fits.
       </p>
+
+      {/* AI planning: describe a goal to re-solve, or ask which plan to use. */}
+      {(onOptimizeGoal || onRecommend) && (
+        <div className="ai-plan-panel">
+          <div className="ai-plan-head">
+            <span className="ai-plan-title">✨ Plan with AI</span>
+            <span className="muted">
+              The assistant sets the objective; the solver still builds the plan.
+            </span>
+          </div>
+
+          {onOptimizeGoal && (
+            <div className="ai-plan-goal">
+              <input
+                type="text"
+                className="ai-plan-input"
+                placeholder="e.g. Protect deliveries this week, cost is secondary"
+                value={goal}
+                disabled={optimizingGoal}
+                onChange={(e) => setGoal(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitGoal();
+                }}
+              />
+              <button
+                type="button"
+                className="primary"
+                disabled={!goal.trim() || optimizingGoal}
+                onClick={submitGoal}
+              >
+                {optimizingGoal ? "Optimising…" : "Optimise for this goal"}
+              </button>
+            </div>
+          )}
+
+          <div className="ai-plan-actions">
+            {onRecommend && (
+              <button
+                type="button"
+                className="ghost"
+                disabled={recommending}
+                onClick={askRecommendation}
+              >
+                {recommending ? "Thinking…" : "Ask AI which plan to use"}
+              </button>
+            )}
+          </div>
+
+          {aiError && <p className="ai-plan-error">{aiError}</p>}
+
+          {proposal && !applied && (
+            <div className="ai-plan-reply">
+              <span className="ai-plan-reply-icon" aria-hidden>
+                💬
+              </span>
+              <p>{proposal.rationale}</p>
+            </div>
+          )}
+
+          {proposal && applied && (
+            <div className="ai-plan-result">
+              <p className="ai-plan-result-title">
+                {proposal.strategy || "Objective set"}
+              </p>
+              {proposal.rationale && (
+                <p className="muted">{proposal.rationale}</p>
+              )}
+              <div className="ai-plan-weights">
+                {Object.entries(proposal.weights)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([term, w]) => (
+                    <span key={term} className="ai-weight-chip">
+                      {WEIGHT_LABELS[term] ?? term}
+                      <span className="ai-weight-val">{w.toLocaleString()}</span>
+                    </span>
+                  ))}
+              </div>
+              {outcome && (
+                <div className="ai-plan-outcome">
+                  <span className="ai-plan-outcome-label">Did it meet the goal?</span>
+                  <p>{outcome}</p>
+                </div>
+              )}
+              <p className="muted ai-plan-note">
+                Applied as a modified current plan — see the updated KPIs above.
+              </p>
+            </div>
+          )}
+
+          {recommendation && (
+            <div className="ai-plan-result">
+              <p className="ai-plan-result-title">
+                Recommended:{" "}
+                <strong>
+                  {recommendedName ?? recommendation.recommended_name}
+                </strong>
+                {recommendation.fallback && (
+                  <span className="muted"> (automatic pick)</span>
+                )}
+              </p>
+              <p className="muted">{recommendation.rationale}</p>
+              {recommendation.considerations.length > 0 && (
+                <ul className="ai-plan-considerations">
+                  {recommendation.considerations.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              )}
+              {onApply &&
+                recommendation.recommended_type !== committedType && (
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={applyDisabled}
+                    onClick={() =>
+                      onApply(
+                        recommendation.recommended_type,
+                        recommendedName ?? recommendation.recommended_name
+                      )
+                    }
+                  >
+                    Use recommended plan
+                  </button>
+                )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Scenario selector — one card per scenario. */}
       <div className="scenario-cards" role="tablist" aria-label="Scenarios">
@@ -389,6 +592,30 @@ export function ScenarioComparison({
 
           <div className="scenario-section">
             <span className="scenario-approach-label">Why this plan looks like this</span>
+            {proposal &&
+              applied &&
+              selected.scenario_type === committedType &&
+              Object.keys(proposal.weights).length > 0 && (
+                <div className="scenario-goal-emphasis">
+                  <p className="muted">
+                    Optimised for your goal
+                    {proposal.strategy ? ` — ${proposal.strategy}` : ""}. The
+                    scheduler was told to emphasise, in order:
+                  </p>
+                  <div className="ai-plan-weights">
+                    {Object.entries(proposal.weights)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([term, w]) => (
+                        <span key={term} className="ai-weight-chip">
+                          {WEIGHT_LABELS[term] ?? term}
+                          <span className="ai-weight-val">
+                            {w.toLocaleString()}
+                          </span>
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              )}
             <ul className="scenario-why">
               {buildExplanation(comparison, selected).map((line, i) => (
                 <li key={i}>{line}</li>

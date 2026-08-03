@@ -10,8 +10,10 @@ The plant runs on a fixed rhythm:
 This module owns that cadence. It is deliberately idempotent: a day that is
 already generated and planned is skipped, so restarting the server or running
 the cycle repeatedly never recomputes or changes an existing plan (the "compute
-once, then reuse" rule). A lightweight daemon thread runs the cycle once at
-startup and then again shortly after each local midnight.
+once, then reuse" rule). If the server was offline across one or more midnights,
+the cycle **backfills every missing day in order** so the daily chain is never
+broken. A lightweight daemon thread runs the cycle once at startup and then
+again shortly after each local midnight.
 """
 
 from __future__ import annotations
@@ -22,12 +24,14 @@ from pathlib import Path
 
 from app.core.logging import get_logger
 from app.services.orchestrator import PlanningOrchestrator
-from app.utils.datetime_utils import format_business_date
+from app.utils.datetime_utils import format_business_date, parse_business_date
+from app.utils.file_utils import list_dated_subdirs
 from simulator.engine import SimulatorEngine
 
 logger = get_logger(__name__)
 
 _SATURDAY = 5  # date.weekday(): Monday=0 … Saturday=5
+_MAX_BACKFILL_DAYS = 45  # safety cap when catching up after a long outage
 
 
 class PlanningScheduler:
@@ -65,15 +69,63 @@ class PlanningScheduler:
 
         return did_work
 
+    # -- Chain-preserving catch-up -----------------------------------------
+    def _last_snapshot_date(self) -> date | None:
+        """Return the most recent snapshot date on disk, or ``None`` if none."""
+        existing = list_dated_subdirs(self._datasets_dir)
+        if not existing:
+            return None
+        try:
+            return parse_business_date(existing[-1])
+        except ValueError:
+            return None
+
+    def catch_up(self, today: date) -> bool:
+        """Generate every missing day from the last snapshot up to ``today``.
+
+        Each day evolves from the one before it, so the daily chain is never
+        broken even if the server was down across one or more midnights. Returns
+        whether *today* had work done (used to gate the autonomous bundle).
+        Idempotent: days already generated are skipped.
+        """
+        last = self._last_snapshot_date()
+        if last is not None and last < today:
+            start = last + timedelta(days=1)
+            # Cap the backfill so a very long outage can't spin forever; the
+            # chain still resumes correctly from the capped start.
+            gap = (today - start).days + 1
+            if gap > _MAX_BACKFILL_DAYS:
+                logger.warning(
+                    "Scheduler: %d-day gap since %s exceeds cap; backfilling last %d days.",
+                    gap,
+                    format_business_date(last),
+                    _MAX_BACKFILL_DAYS,
+                )
+                start = today - timedelta(days=_MAX_BACKFILL_DAYS - 1)
+            day = start
+            while day < today:
+                logger.info(
+                    "Scheduler: backfilling missing day %s.", format_business_date(day)
+                )
+                self.ensure_day(day)
+                day += timedelta(days=1)
+
+        # Finally ensure today (snapshot + pipeline); returns whether work ran.
+        return self.ensure_day(today)
+
     # -- Daily + weekly cadence --------------------------------------------
     def run_cycle(self, today: date) -> None:
-        """Refresh today's plan and, on Saturdays, publish next week's plans."""
-        did_work = self.ensure_day(today)
+        """Refresh today's plan and, on Saturdays, publish next week's plans.
+
+        Backfills any missing days first so the daily chain stays continuous
+        even after the server has been offline.
+        """
+        did_work = self.catch_up(today)
 
         # After a fresh daily plan, run the autonomous action bundle (each step
-        # is individually gated by its setting): remediate high-priority late
-        # orders, reorder low materials, auto-commit the best plan, relieve a
-        # bottleneck, and email a daily briefing.
+        # is individually gated by its setting): reorder low materials, resolve
+        # conflicts, commit the lowest-risk plan, prioritise late orders, and
+        # email a daily briefing.
         if did_work:
             try:
                 self._orch.run_autonomy(
